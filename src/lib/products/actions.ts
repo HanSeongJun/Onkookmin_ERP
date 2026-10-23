@@ -682,6 +682,8 @@ function saveFailed(error: PostgrestError): ProductActionResult {
       return fieldFailed({ items: error.message })
     case PRODUCT_DB_RULES.activationBlocked:
       return fieldFailed({ isActive: error.message })
+    case PRODUCT_DB_RULES.unitHasStock:
+      return fieldFailed({ unit: error.message })
     case PRODUCT_DB_RULES.productNotFound:
     case PRODUCT_DB_RULES.bundleNotFound:
       return formFailed(PRODUCT_NOT_FOUND_MESSAGE)

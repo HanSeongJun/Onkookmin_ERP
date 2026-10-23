@@ -5,6 +5,7 @@ import { z } from "zod"
 
 import { buildCategoryTree, type CategoryNode } from "@/lib/categories/tree"
 import type { ExistingEmployee, ExistingPartner } from "@/lib/imports/partners"
+import type { OpeningStockLookups } from "@/lib/imports/opening-stock"
 import type { ExistingProduct } from "@/lib/imports/products"
 import {
   buildPartnerCategoryTree,
@@ -123,6 +124,135 @@ export async function findEmployeesForImport(
     isDeliveryDriver: row.is_delivery_driver,
     mobile: row.mobile ?? null,
   }))
+}
+
+const openingStockRefsSchema = z.object({
+  products: z.array(
+    z.object({
+      code: z.string(),
+      name: z.string(),
+      product_type: z.enum(Constants.public.Enums.product_type),
+      is_active: z.boolean(),
+      unit: z.string(),
+      storage_type: z.enum(Constants.public.Enums.storage_type).nullable(),
+      shelf_life_days: z.number().nullable(),
+    })
+  ),
+  suppliers: z.array(
+    z.object({
+      code: z.string(),
+      name: z.string(),
+      partner_type: z.enum(Constants.public.Enums.partner_type),
+      is_active: z.boolean(),
+    })
+  ),
+  lots: z.array(z.object({ product_code: z.string(), lot_no: z.string() })),
+  opening_lots: z.array(
+    z.object({
+      product_code: z.string(),
+      warehouse_code: z.string(),
+      zone_code: z.string(),
+      location_code: z.string(),
+      quantity: z.number(),
+      expiry_date: z.string().nullable(),
+      received_date: z.string(),
+      doc_no: z.string(),
+    })
+  ),
+  warehouses: z.array(
+    z.object({
+      code: z.string(),
+      name: z.string(),
+      is_active: z.boolean(),
+      zones: z.array(
+        z.object({
+          code: z.string(),
+          name: z.string(),
+          storage_type: z.enum(Constants.public.Enums.storage_type),
+          is_active: z.boolean(),
+          locations: z.array(
+            z.object({
+              code: z.string(),
+              name: z.string().nullable(),
+              is_default: z.boolean(),
+              is_active: z.boolean(),
+            })
+          ),
+        })
+      ),
+    })
+  ),
+})
+
+/**
+ * What the 기초재고 check needs, in ONE request
+ * (import_find_opening_stock_refs): the file's 상품 and 매입처 (by code,
+ * ignoring case), the 로트번호 those products use already, and every
+ * 창고 > 구역 > 위치.
+ */
+export async function findOpeningStockRefs(keys: {
+  productCodes: string[]
+  supplierCodes: string[]
+  lotNos: string[]
+}): Promise<OpeningStockLookups> {
+  const supabase = await createClient()
+  const { data, error } = await supabase.rpc("import_find_opening_stock_refs", {
+    product_codes: keys.productCodes,
+    supplier_codes: keys.supplierCodes,
+    lot_nos: keys.lotNos,
+  })
+  if (error) throw rpcFailed("재고 기초 자료를 확인하지 못했습니다", error)
+  const refs = openingStockRefsSchema.parse(data)
+  const { data: today } = await supabase.rpc("stock_today")
+  return {
+    today: typeof today === "string" ? today : undefined,
+    products: refs.products.map((row) => ({
+      code: row.code,
+      name: row.name,
+      productType: row.product_type,
+      isActive: row.is_active,
+      unit: row.unit,
+      storageType: row.storage_type,
+      shelfLifeDays: row.shelf_life_days,
+    })),
+    suppliers: refs.suppliers.map((row) => ({
+      code: row.code,
+      name: row.name,
+      partnerType: row.partner_type,
+      isActive: row.is_active,
+    })),
+    lots: refs.lots.map((row) => ({
+      productCode: row.product_code,
+      lotNo: row.lot_no,
+    })),
+    openingLots: refs.opening_lots.map((row) => ({
+      productCode: row.product_code,
+      warehouseCode: row.warehouse_code,
+      zoneCode: row.zone_code,
+      locationCode: row.location_code,
+      quantity: row.quantity,
+      expiryDate: row.expiry_date,
+      receivedDate: row.received_date,
+      docNo: row.doc_no,
+    })),
+    warehouses: refs.warehouses.map((warehouse) => ({
+      code: warehouse.code,
+      name: warehouse.name,
+      isActive: warehouse.is_active,
+      zones: warehouse.zones.map((zone) => ({
+        code: zone.code,
+        name: zone.name,
+        storageType: zone.storage_type,
+        isActive: zone.is_active,
+        locations: zone.locations.map((location) => ({
+          code: location.code,
+          name: location.name,
+          isDefault: location.is_default,
+          isActive: location.is_active,
+        })),
+      })),
+    })),
+  }
 }
 
 /**

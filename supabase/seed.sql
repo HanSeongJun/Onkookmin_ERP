@@ -636,3 +636,416 @@ begin
   end if;
 end;
 $$;
+
+-- =============================================================================
+-- 재고 (sample data for 재고관리)
+-- Every date is counted from the day `npx supabase db reset` runs (Korea
+-- time, public.stock_today()), so the sample always has stock that is 기한
+-- 경과, 기한 임박 (the default setting: 7 days) and far from its 기한.
+-- Stock is created only through the real functions (import_opening_stock,
+-- receive_stock, issue_stock, …), in date order, exactly like the app.
+-- =============================================================================
+
+-- Small look-ups for this file only (temporary: gone after the reset).
+create function pg_temp.product_id(product_code text)
+returns uuid language sql stable as $$
+  select id from public.products where code = $1
+$$;
+create function pg_temp.partner_id(partner_code text)
+returns uuid language sql stable as $$
+  select id from public.partners where code = $1
+$$;
+create function pg_temp.location_id(warehouse_code text, zone_code text, location_code text)
+returns uuid language sql stable as $$
+  select location.id
+  from public.storage_locations as location
+  join public.warehouse_zones as zone on zone.id = location.zone_id
+  join public.warehouses as warehouse on warehouse.id = zone.warehouse_id
+  where warehouse.code = $1 and zone.code = $2 and location.code = $3
+$$;
+-- "YYYY-MM-DD" of today + days (Korea).
+create function pg_temp.day(days integer)
+returns text language sql stable as $$
+  select to_char(public.stock_today() + $1, 'YYYY-MM-DD')
+$$;
+
+-- -----------------------------------------------------------------------------
+-- 창고 > 구역 > 위치. Every 구역 gets its "기본" 위치 automatically.
+-- 용인 제2창고 has a switched-off 구역 (반품 대기) and a switched-off 위치
+-- (R-99, no stock may go in).
+-- -----------------------------------------------------------------------------
+
+insert into public.warehouses (code, name, postal_code, address, address_detail, sort_order, note) values
+  ('W01', '본사 물류센터', '17111', '경기 용인시 처인구 백옥대로 200', 'A동', 1, '주 출고 창고'),
+  ('W02', '용인 제2창고', '17112', '경기 용인시 처인구 포곡읍 전대로 50', null, 2, '냉동·상온 보관 보조 창고');
+
+insert into public.warehouse_zones (warehouse_id, code, name, storage_type, sort_order, is_active)
+select warehouse.id, v.code, v.name, v.storage_type::public.storage_type, v.sort_order, v.is_active
+from (
+  values
+    ('W01', 'R', '상온 A구역', 'room', 1, true),
+    ('W01', 'C', '냉장 B구역', 'chilled', 2, true),
+    ('W01', 'F', '냉동 C구역', 'frozen', 3, true),
+    ('W02', 'R', '상온 구역', 'room', 1, true),
+    ('W02', 'F', '냉동 구역', 'frozen', 2, true),
+    ('W02', 'X', '반품 대기', 'room', 3, false)
+) as v (warehouse_code, code, name, storage_type, sort_order, is_active)
+join public.warehouses as warehouse on warehouse.code = v.warehouse_code;
+
+insert into public.storage_locations (zone_id, code, name, sort_order, is_active)
+select zone.id, v.code, v.name, v.sort_order, v.is_active
+from (
+  values
+    ('W01', 'R', 'A-01-01', '1열 1단', 1, true),
+    ('W01', 'R', 'A-01-02', '1열 2단', 2, true),
+    ('W01', 'R', 'A-02-01', '2열 1단', 3, true),
+    ('W01', 'C', 'C-01-01', '냉장 1열 1단', 1, true),
+    ('W01', 'C', 'C-01-02', '냉장 1열 2단', 2, true),
+    ('W01', 'F', 'F-01-01', '냉동 1열 1단', 1, true),
+    ('W01', 'F', 'F-01-02', '냉동 1열 2단', 2, true),
+    ('W02', 'R', 'R-01', null, 1, true),
+    ('W02', 'R', 'R-99', '폐쇄 선반', 9, false),
+    ('W02', 'F', 'F-01', null, 1, true)
+) as v (warehouse_code, zone_code, code, name, sort_order, is_active)
+join public.warehouses as warehouse on warehouse.code = v.warehouse_code
+join public.warehouse_zones as zone on zone.warehouse_id = warehouse.id and zone.code = v.zone_code;
+
+-- -----------------------------------------------------------------------------
+-- 기초재고 (30 days ago): 43 rows for 36 기준상품, through the same function
+-- as 자료일괄등록 → 기초재고 일괄등록. Some lots are already past their 기한
+-- (청양고추, 방울토마토, 삼겹살, 대파), one has no 입고단가 (땅콩버터: the
+-- 기본 매입가 is used), one has neither (대파: no 재고금액), 진간장·고추장
+-- carry a 유통기한 instead of a 소비기한, 양파·감자·쌀·양배추 have none.
+-- Columns: row, 상품코드, 수량, 창고, 구역, 선반, 기한종류, 기한 (days from
+-- today), 입고일 (days ago), 로트번호, 입고단가, 매입처.
+-- -----------------------------------------------------------------------------
+
+select public.import_opening_stock(
+  (
+    select jsonb_agg(
+      jsonb_build_object(
+        'excel_row', v.excel_row,
+        'product_code', v.product_code,
+        'quantity', v.quantity,
+        'warehouse_code', v.warehouse_code,
+        'zone_code', v.zone_code,
+        'location_code', v.location_code,
+        'expiry_kind', v.expiry_kind,
+        'expiry_date', case when v.expiry_in is not null then pg_temp.day(v.expiry_in) end,
+        'received_date', pg_temp.day(-v.received_ago),
+        'lot_no', v.lot_no,
+        'unit_cost_incl_vat', v.unit_cost,
+        'supplier_code', v.supplier_code
+      )
+      order by v.excel_row
+    )
+    from (
+      values
+        (2, 'VEG-001', 20, 'W01', 'R', 'A-01-01', 'none', null, 35, null, 16500, '200005'),
+        (3, 'VEG-001', 8, 'W01', 'R', 'A-01-01', 'none', null, 40, null, 16000, '200005'),
+        (4, 'VEG-003', 15, 'W01', 'C', 'C-01-01', 'use_by', 5, 31, null, 9500, '200005'),
+        (5, 'VEG-004', 10, 'W01', 'R', 'A-01-02', 'none', null, 33, null, 32000, '200005'),
+        (6, 'VEG-006', 6, 'W01', 'C', 'C-01-01', 'use_by', -2, 36, null, 28000, '200007'),
+        (7, 'FRU-001', 5, 'W01', 'C', 'C-01-02', 'use_by', -1, 34, null, 25000, '200007'),
+        (8, 'FRU-003', 12, 'W01', 'R', 'A-02-01', 'use_by', 300, 60, 'TR-2026-118', 15400, '200009'),
+        (9, 'GRN-001', 25, 'W01', 'R', 'A-01-02', 'none', null, 45, null, 54000, '200005'),
+        (10, 'NUT-001', 8, 'W01', 'C', 'C-01-02', 'use_by', 200, 50, null, 18000, '200009'),
+        (11, 'NUT-002', 3, 'W01', 'C', 'C-01-02', 'use_by', 250, 50, null, 68000, '200009'),
+        (12, 'SEA-001', 30, 'W01', 'F', 'F-01-01', 'use_by', 500, 60, null, 12500, '200001'),
+        (13, 'SEA-001', 20, 'W02', 'F', 'F-01', 'use_by', 420, 90, null, 12000, '200001'),
+        (14, 'SEA-002', 25, 'W01', 'F', 'F-01-01', 'use_by', 300, 60, null, 9800, '200001'),
+        (15, 'SEA-003', 15, 'W01', 'F', 'F-01-02', 'use_by', 200, 70, null, 11000, '200001'),
+        (16, 'SEA-004', 10, 'W02', 'F', 'F-01', 'use_by', 100, 80, null, 15000, '200001'),
+        (17, 'DRY-001', 10, 'W01', 'C', 'C-01-02', 'use_by', 200, 100, null, 27000, '200001'),
+        (18, 'DRY-002', 40, 'W01', 'R', 'A-02-01', 'use_by', 250, 100, null, 9000, '300001'),
+        (19, 'MEA-001', 12.5, 'W01', 'C', 'C-01-01', 'use_by', -1, 35, null, 21000, '200006'),
+        (20, 'MEA-002', 40.25, 'W01', 'F', 'F-01-02', 'use_by', 500, 120, null, 7800, '200006'),
+        (21, 'MEA-003', 18.6, 'W02', 'F', 'F-01', 'use_by', 400, 120, null, 16500, '200006'),
+        (22, 'MEA-004', 20, 'W01', 'F', 'F-01-02', 'use_by', 300, 90, null, 11000, '200006'),
+        (23, 'PRC-001', 30, 'W01', 'F', 'F-01-01', 'use_by', 200, 70, null, 8700, '200002'),
+        (24, 'PRC-001', 12, 'W01', 'F', 'F-01-01', 'use_by', 120, 150, null, 8500, '200002'),
+        (25, 'PRC-002', 20, 'W01', 'C', 'C-01-02', 'use_by', 25, 40, null, 3500, '200002'),
+        (26, 'PRC-004', 8, 'W01', 'C', 'C-01-02', 'use_by', 150, 40, null, 21500, '200004'),
+        (27, 'PRC-005', 24, 'W01', 'R', 'A-02-01', 'use_by', 900, 100, null, 23100, '300001'),
+        (28, 'PRC-005', 6, 'W02', 'R', 'R-01', 'use_by', 700, 200, null, 22500, '300001'),
+        (29, 'PRC-007', 10, 'W01', 'R', 'A-02-01', 'use_by', 300, 70, null, null, '200009'),
+        (30, 'PRC-010', 30, 'W01', 'R', 'A-01-01', 'use_by', 1000, 60, null, 23700, '300003'),
+        (31, 'PRC-010', 24, 'W01', 'R', 'A-01-01', 'use_by', 800, 200, null, 23500, '300003'),
+        (32, 'SAU-001', 6, 'W01', 'R', 'A-02-01', 'sell_by', 600, 90, null, 26400, '200003'),
+        (33, 'SAU-002', 4, 'W01', 'R', 'A-02-01', 'sell_by', 400, 90, null, 57200, '200003'),
+        (34, 'SAU-003', 10, 'W01', 'R', 'A-02-01', 'use_by', 300, 60, null, 7600, '300004'),
+        (35, 'SAU-004', 8, 'W02', 'R', 'R-01', 'use_by', 600, 90, null, 50600, '300004'),
+        (36, 'SAU-005', 12, 'W01', 'R', 'A-02-01', 'use_by', 500, 90, null, 13800, '200009'),
+        (37, 'ETC-001', 50, 'W02', 'R', 'R-01', 'use_by', 250, 40, null, 3300, '300002'),
+        (38, 'SAU-006', 6, 'W01', 'R', 'A-02-01', 'use_by', 400, 50, null, 20400, '200003'),
+        (39, 'FRU-004', 15, 'W01', 'F', 'F-01-02', 'use_by', 600, 60, null, 8500, '200009'),
+        (40, 'VEG-002', 10, 'W01', 'C', 'C-01-01', 'use_by', -3, 35, null, null, '200007'),
+        (41, 'PRC-003', 10, 'W01', 'C', 'C-01-02', 'use_by', 40, 45, null, 6200, '200002'),
+        (42, 'VEG-005', 6, 'W01', 'C', '기본', 'none', null, 33, null, 9000, '200007'),
+        (43, 'SAU-003', 4, 'W01', 'R', null, 'use_by', 280, 70, null, 7400, '300004'),
+        (44, 'GRN-001', 5, 'W02', 'R', 'R-01', 'none', null, 60, null, 53000, '200005')
+    ) as v (
+      excel_row, product_code, quantity, warehouse_code, zone_code, location_code,
+      expiry_kind, expiry_in, received_ago, lot_no, unit_cost, supplier_code
+    )
+  ),
+  public.stock_today() - 30
+);
+
+-- -----------------------------------------------------------------------------
+-- 전표 after the 기초재고, in date order (days ago):
+-- 25 입고 (생굴: 기한 from 제조일자 + 7일 → past now; 오징어)
+-- 20 입고 of 묶음상품 ([박스] 스팸 ×24 → 48 스팸; 선물세트 → 스팸·참치·김
+--    with the 입고단가 split by 기본 매입가, 기한 per 기준상품)
+-- 18 입고 (삼겹살 25.75 kg, 기한 from 제조일자)
+-- 15 출고 to 한빛식당 (FEFO)
+-- 12 이동 (체다치즈 → 상온 구역: 보관온도 불일치; 새우 → 제2창고)
+-- 10 출고 of a 묶음상품 to 청담스시 (6개입 ×2 → 스팸 12)
+--  8 입고 (계란, 체다치즈)
+--  7 폐기 (파손, 품질 불량)
+--  5 입고 (생굴, 깐마늘, 방울토마토: 기한 임박)
+--  4 실사조정 in 냉장 B구역 (−1, +1, a found lot)
+--  3 입고 by mistake (잣) → 2 취소
+--  2 폐기 of 기한 경과 lots
+--  1 출고 to 푸른초등학교 급식실
+--  0 입고 (대파, no 입고단가 and no 기본 매입가) and 출고 to 더스테이크하우스
+-- -----------------------------------------------------------------------------
+
+do $$
+declare
+  mistake jsonb;
+begin
+  perform public.receive_stock(
+    jsonb_build_object('doc_date', pg_temp.day(-25), 'partner_id', pg_temp.partner_id('200001'), 'memo', '정기 입고'),
+    jsonb_build_array(
+      jsonb_build_object('product_id', pg_temp.product_id('SEA-005'), 'quantity', 10,
+        'location_id', pg_temp.location_id('W01', 'C', 'C-01-01'), 'expiry_kind', 'use_by',
+        'manufactured_date', pg_temp.day(-26), 'unit_cost_incl_vat', 13000),
+      jsonb_build_object('product_id', pg_temp.product_id('SEA-002'), 'quantity', 20,
+        'location_id', pg_temp.location_id('W01', 'F', 'F-01-02'), 'expiry_kind', 'use_by',
+        'expiry_date', pg_temp.day(400), 'unit_cost_incl_vat', 9600, 'supplier_lot_no', 'PE-55120')
+    )
+  );
+
+  perform public.receive_stock(
+    jsonb_build_object('doc_date', pg_temp.day(-20), 'partner_id', pg_temp.partner_id('300003'), 'memo', '묶음상품 입고'),
+    jsonb_build_array(
+      jsonb_build_object('product_id', pg_temp.product_id('PRC-010-24'), 'quantity', 2,
+        'location_id', pg_temp.location_id('W01', 'R', 'A-01-01'), 'expiry_kind', 'use_by',
+        'expiry_date', pg_temp.day(1050), 'unit_cost_incl_vat', 552000),
+      jsonb_build_object('product_id', pg_temp.product_id('PRC-010-SET'), 'quantity', 3,
+        'location_id', pg_temp.location_id('W01', 'R', 'A-02-01'), 'expiry_kind', 'use_by',
+        'manufactured_date', pg_temp.day(-21), 'unit_cost_incl_vat', 121000)
+    )
+  );
+
+  perform public.receive_stock(
+    jsonb_build_object('doc_date', pg_temp.day(-18), 'partner_id', pg_temp.partner_id('200006')),
+    jsonb_build_array(
+      jsonb_build_object('product_id', pg_temp.product_id('MEA-001'), 'quantity', 25.75,
+        'location_id', pg_temp.location_id('W01', 'C', 'C-01-01'), 'expiry_kind', 'use_by',
+        'manufactured_date', pg_temp.day(-19), 'unit_cost_incl_vat', 20500)
+    )
+  );
+
+  perform public.issue_stock(
+    jsonb_build_object('doc_date', pg_temp.day(-15), 'partner_id', pg_temp.partner_id('100001'), 'memo', '주간 납품'),
+    jsonb_build_array(
+      jsonb_build_object('product_id', pg_temp.product_id('MEA-001'), 'quantity', 20),
+      jsonb_build_object('product_id', pg_temp.product_id('VEG-001'), 'quantity', 5),
+      jsonb_build_object('product_id', pg_temp.product_id('PRC-001'), 'quantity', 15),
+      jsonb_build_object('product_id', pg_temp.product_id('PRC-010'), 'quantity', 10)
+    )
+  );
+
+  perform public.transfer_stock(
+    jsonb_build_object('doc_date', pg_temp.day(-12), 'memo', '선반 정리'),
+    jsonb_build_array(
+      jsonb_build_object(
+        'lot_id', (select lot.id from public.stock_lots as lot where lot.product_id = pg_temp.product_id('PRC-004')),
+        'from_location_id', pg_temp.location_id('W01', 'C', 'C-01-02'),
+        'to_location_id', pg_temp.location_id('W01', 'R', 'A-01-02'),
+        'quantity', 3, 'memo', '냉장고 정리 중 임시 보관'),
+      jsonb_build_object(
+        'lot_id', (
+          select lot.id from public.stock_lots as lot
+          join public.stock_balances as balance on balance.lot_id = lot.id
+          where lot.product_id = pg_temp.product_id('SEA-001')
+            and balance.location_id = pg_temp.location_id('W01', 'F', 'F-01-01')
+        ),
+        'from_location_id', pg_temp.location_id('W01', 'F', 'F-01-01'),
+        'to_location_id', pg_temp.location_id('W02', 'F', 'F-01'),
+        'quantity', 10)
+    )
+  );
+
+  perform public.issue_stock(
+    jsonb_build_object('doc_date', pg_temp.day(-10), 'partner_id', pg_temp.partner_id('100002')),
+    jsonb_build_array(
+      jsonb_build_object('product_id', pg_temp.product_id('PRC-010-6'), 'quantity', 2),
+      jsonb_build_object('product_id', pg_temp.product_id('SEA-002'), 'quantity', 5),
+      jsonb_build_object('product_id', pg_temp.product_id('SEA-001'), 'quantity', 8,
+        'warehouse_id', (select id from public.warehouses where code = 'W01'))
+    )
+  );
+
+  perform public.receive_stock(
+    jsonb_build_object('doc_date', pg_temp.day(-8), 'partner_id', pg_temp.partner_id('200004')),
+    jsonb_build_array(
+      jsonb_build_object('product_id', pg_temp.product_id('EGG-001'), 'quantity', 20,
+        'location_id', pg_temp.location_id('W01', 'C', 'C-01-01'), 'expiry_kind', 'use_by',
+        'manufactured_date', pg_temp.day(-9), 'unit_cost_incl_vat', 6200),
+      jsonb_build_object('product_id', pg_temp.product_id('PRC-004'), 'quantity', 6,
+        'location_id', pg_temp.location_id('W01', 'C', 'C-01-02'), 'expiry_kind', 'use_by',
+        'expiry_date', pg_temp.day(170), 'unit_cost_incl_vat', 21000, 'lot_no', 'DF-1008')
+    )
+  );
+
+  perform public.dispose_stock(
+    jsonb_build_object('doc_date', pg_temp.day(-7)),
+    jsonb_build_array(
+      jsonb_build_object(
+        'lot_id', (select lot.id from public.stock_lots as lot where lot.product_id = pg_temp.product_id('SEA-003')),
+        'location_id', pg_temp.location_id('W01', 'F', 'F-01-02'),
+        'quantity', 1, 'reason', 'damaged', 'memo', '포장 파손'),
+      jsonb_build_object(
+        'lot_id', (select lot.id from public.stock_lots as lot where lot.product_id = pg_temp.product_id('PRC-002')),
+        'location_id', pg_temp.location_id('W01', 'C', 'C-01-02'),
+        'quantity', 2, 'reason', 'quality')
+    )
+  );
+
+  perform public.receive_stock(
+    jsonb_build_object('doc_date', pg_temp.day(-5), 'partner_id', pg_temp.partner_id('200001')),
+    jsonb_build_array(
+      jsonb_build_object('product_id', pg_temp.product_id('SEA-005'), 'quantity', 8,
+        'location_id', pg_temp.location_id('W01', 'C', 'C-01-01'), 'expiry_kind', 'use_by',
+        'manufactured_date', pg_temp.day(-5), 'unit_cost_incl_vat', 13500),
+      jsonb_build_object('product_id', pg_temp.product_id('VEG-003'), 'quantity', 10,
+        'location_id', pg_temp.location_id('W01', 'C', 'C-01-01'), 'expiry_kind', 'use_by',
+        'manufactured_date', pg_temp.day(-6), 'unit_cost_incl_vat', 9500),
+      jsonb_build_object('product_id', pg_temp.product_id('FRU-001'), 'quantity', 4,
+        'location_id', pg_temp.location_id('W01', 'C', 'C-01-02'), 'expiry_kind', 'use_by',
+        'expiry_date', pg_temp.day(5), 'unit_cost_incl_vat', 26000)
+    )
+  );
+
+  perform public.apply_stock_count(
+    jsonb_build_object('doc_date', pg_temp.day(-4), 'memo', '월중 냉장 B구역 실사'),
+    (
+      select jsonb_agg(jsonb_build_object(
+        'lot_id', balance.lot_id,
+        'location_id', balance.location_id,
+        'system_quantity', balance.quantity,
+        'counted_quantity', balance.quantity + case product.code when 'VEG-005' then -1 else 1 end,
+        'memo', case product.code when 'VEG-005' then '1망 분실' else '수량 착오' end
+      ))
+      from public.stock_balances as balance
+      join public.products as product on product.id = balance.product_id
+      where product.code in ('VEG-005', 'DRY-001') and balance.quantity > 0
+    ),
+    jsonb_build_array(
+      jsonb_build_object('product_id', pg_temp.product_id('PRC-008'), 'quantity', 5,
+        'location_id', pg_temp.location_id('W01', 'C', 'C-01-02'), 'expiry_kind', 'use_by',
+        'expiry_date', pg_temp.day(20), 'unit_cost_incl_vat', 2600, 'memo', '전산 미등록 재고 발견')
+    )
+  );
+
+  mistake := public.receive_stock(
+    jsonb_build_object('doc_date', pg_temp.day(-3), 'partner_id', pg_temp.partner_id('200009'), 'memo', '수량 잘못 입력'),
+    jsonb_build_array(
+      jsonb_build_object('product_id', pg_temp.product_id('NUT-002'), 'quantity', 50,
+        'location_id', pg_temp.location_id('W01', 'C', 'C-01-02'), 'expiry_kind', 'use_by',
+        'expiry_date', pg_temp.day(240), 'unit_cost_incl_vat', 68000)
+    )
+  );
+  perform public.reverse_stock_document(
+    (mistake ->> 'document_id')::uuid,
+    jsonb_build_object('doc_date', pg_temp.day(-2), 'memo', '수량 오입력으로 취소 (5봉을 50봉으로)')
+  );
+
+  perform public.dispose_stock(
+    jsonb_build_object('doc_date', pg_temp.day(-2), 'memo', '기한 경과 재고 폐기'),
+    (
+      select jsonb_agg(jsonb_build_object(
+        'lot_id', balance.lot_id,
+        'location_id', balance.location_id,
+        'quantity', balance.quantity,
+        'reason', 'expired'
+      ))
+      from public.stock_balances as balance
+      join public.stock_lots as lot on lot.id = balance.lot_id
+      join public.products as product on product.id = balance.product_id
+      where product.code in ('SEA-005', 'VEG-006')
+        and lot.expiry_date < public.stock_today() - 2
+        and balance.quantity > 0
+    )
+  );
+
+  perform public.issue_stock(
+    jsonb_build_object('doc_date', pg_temp.day(-1), 'partner_id', pg_temp.partner_id('100008'), 'memo', '급식 식자재'),
+    jsonb_build_array(
+      jsonb_build_object('product_id', pg_temp.product_id('EGG-001'), 'quantity', 5),
+      jsonb_build_object('product_id', pg_temp.product_id('VEG-001'), 'quantity', 3),
+      jsonb_build_object('product_id', pg_temp.product_id('DRY-002'), 'quantity', 10),
+      jsonb_build_object('product_id', pg_temp.product_id('GRN-001'), 'quantity', 5)
+    )
+  );
+
+  perform public.receive_stock(
+    jsonb_build_object('partner_id', pg_temp.partner_id('200007')),
+    jsonb_build_array(
+      jsonb_build_object('product_id', pg_temp.product_id('VEG-002'), 'quantity', 15,
+        'location_id', pg_temp.location_id('W01', 'C', 'C-01-01'), 'expiry_kind', 'use_by',
+        'expiry_date', pg_temp.day(6))
+    )
+  );
+  perform public.issue_stock(
+    jsonb_build_object('partner_id', pg_temp.partner_id('100020')),
+    jsonb_build_array(
+      jsonb_build_object('product_id', pg_temp.product_id('MEA-003'), 'quantity', 5.5),
+      jsonb_build_object('product_id', pg_temp.product_id('SEA-004'), 'quantity', 2)
+    )
+  );
+end;
+$$;
+
+-- Stop the reset when the sample stock is not what the notes above say.
+do $$
+begin
+  if (select count(*) from public.warehouses) <> 2
+    or (select count(*) from public.warehouse_zones) <> 6
+    or (select count(*) from public.storage_locations) <> 16
+    or (select count(*) from public.storage_locations where is_default) <> 6 then
+    raise exception 'seed.sql: expected 2 창고, 6 구역 and 16 위치 (6 기본 위치).';
+  end if;
+  if (select count(*) from public.stock_documents) <> 17
+    or (select count(*) from public.stock_documents where doc_type = 'opening') <> 1
+    or (select count(*) from public.stock_documents where doc_type = 'receipt') <> 7
+    or (select count(*) from public.stock_documents where doc_type = 'issue') <> 4
+    or (select count(*) from public.stock_documents where doc_type = 'transfer') <> 1
+    or (select count(*) from public.stock_documents where doc_type = 'disposal') <> 2
+    or (select count(*) from public.stock_documents where doc_type = 'count') <> 1
+    or (select count(*) from public.stock_documents where doc_type = 'reversal') <> 1 then
+    raise exception 'seed.sql: expected 17 재고 전표 (기초 1, 입고 7, 출고 4, 이동 1, 폐기 2, 실사 1, 취소 1), got %.',
+      (select count(*) from public.stock_documents);
+  end if;
+  if (select count(*) from public.stock_lots) <> 58 then
+    raise exception 'seed.sql: expected 58 로트, got %.', (select count(*) from public.stock_lots);
+  end if;
+  if (select count(distinct product_id) from public.stock_lots) <> 39 then
+    raise exception 'seed.sql: expected lots of 39 기준상품, got %.',
+      (select count(distinct product_id) from public.stock_lots);
+  end if;
+  if not exists (select 1 from public.lot_stock_items where expiry_status = 'expired')
+    or not exists (select 1 from public.lot_stock_items where expiry_status = 'imminent')
+    or not exists (select 1 from public.lot_stock_items where storage_too_warm)
+    or not exists (select 1 from public.lot_stock_items where cost_estimated) then
+    raise exception 'seed.sql: the sample stock must have 기한 경과, 기한 임박, 보관온도 불일치 and 추정 단가 rows.';
+  end if;
+  if exists (select 1 from public.stock_integrity_check()) then
+    raise exception 'seed.sql: stock_integrity_check() found problems: %',
+      (select jsonb_agg(to_jsonb(problem_row)) from public.stock_integrity_check() as problem_row);
+  end if;
+end;
+$$;

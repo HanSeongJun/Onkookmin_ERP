@@ -99,6 +99,16 @@ export type ImportSpec = {
   listHref: string
   /** Its menu name, e.g. "상품관리". */
   listLabel: string
+  /**
+   * How to correct registered rows (the last line of the 등록 confirm).
+   * Default: "고칠 내용은 ‘<listLabel>’에서 수정해 주세요."
+   */
+  fixHint?: string
+  /**
+   * What the result's list of codes holds (ImportCommitResult.codes), e.g.
+   * "로트번호" for 기초재고. Default "코드" ("등록한 코드: …").
+   */
+  savedCodesLabel?: string
   /** The screen offers "없는 분류는 자동으로 만들기" (default on). */
   hasCategoryOption: boolean
 }

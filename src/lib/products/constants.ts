@@ -339,4 +339,10 @@ export const PRODUCT_DB_RULES = {
    * from before that change sends them.
    */
   priceKeysRenamed: "price_keys_renamed",
+  /**
+   * The 단위 of a product with stock records (재고 로트, or 묶음상품 입고·
+   * 출고 lines) cannot change: every stock quantity is counted in it
+   * (trigger products_keep_unit_with_stock, migration 8).
+   */
+  unitHasStock: "product_unit_has_stock",
 } as const

@@ -240,7 +240,9 @@ export function DataGridEmpty({
         colSpan={colSpan}
         className="h-32 border-b border-grid-line px-2 text-center text-muted-foreground"
       >
-        {children}
+        {/* Kept in view when the grid is wider than the screen (many
+            columns on a phone): sticks to the left edge while scrolling. */}
+        <div className="sticky left-2 max-w-[calc(100vw-3rem)]">{children}</div>
       </td>
     </tr>
   )

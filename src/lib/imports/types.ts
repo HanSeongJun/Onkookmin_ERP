@@ -16,9 +16,9 @@
  * No server imports: Client Components use this file too.
  */
 
-/** The four kinds of 자료일괄등록 (also the last part of the page address). */
+/** The kinds of 자료일괄등록 (also the last part of the page address). */
 export type ImportKind =
-  "product-categories" | "products" | "partners" | "employees"
+  "product-categories" | "products" | "partners" | "employees" | "opening-stock"
 
 /** Most data rows one file may have (all sheets together). */
 export const IMPORT_MAX_ROWS = 3000
@@ -69,6 +69,14 @@ export type ImportInput = {
    * the other imports.
    */
   createMissingCategories?: boolean
+  /**
+   * One id (a UUID) per uploaded file, made by the screen. An import whose
+   * database function keeps it (기초재고) saves a file once: the same
+   * commit sent again (e.g. a retry after the answer was lost) returns what
+   * it already registered instead of registering it twice. Ignored by the
+   * other imports.
+   */
+  requestId?: string
 }
 
 /** 상태 of a row in the 미리보기. */
@@ -143,6 +151,11 @@ export type ImportCommitResult =
       skipped: number
       /** The registered codes in file order (직원: incl. the automatic ones). */
       codes: string[]
+      /**
+       * The same file (requestId) had been registered before: nothing new
+       * was registered, the result is that earlier registration.
+       */
+      alreadySaved?: boolean
       /** Korean summary for a toast, e.g. "상품 120건을 등록했습니다." */
       message: string
     }

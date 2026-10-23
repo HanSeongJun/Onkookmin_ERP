@@ -46,6 +46,7 @@ import {
   type ImportPreview,
   type ImportValidateResult,
 } from "@/lib/imports/types"
+import { newRequestId } from "@/lib/request-id"
 import { cn } from "@/lib/utils"
 
 import { dragHasFiles, ImportDropZone } from "./import-drop-zone"
@@ -68,6 +69,11 @@ export type ImportCommitAction = (
 type LoadedFile = {
   name: string
   size: number
+  /**
+   * One per uploaded file (ImportInput.requestId): 기초재고 registers a
+   * file once, even when 등록 is sent again after a lost answer.
+   */
+  requestId: string
   sheets: Record<string, ImportFileSheet>
   rowCount: number
   /** Notes about the file that do not stop it (e.g. unknown columns). */
@@ -156,6 +162,7 @@ export function ImportScreen({
     return {
       sheets: importSheetsInput(file.sheets),
       createMissingCategories: createMissing,
+      requestId: file.requestId,
     }
   }
 
@@ -200,6 +207,7 @@ export function ImportScreen({
     const next: LoadedFile = {
       name: file.name,
       size: file.size,
+      requestId: newRequestId(),
       sheets: read.sheets,
       rowCount: read.rowCount,
       warnings: read.warnings,
@@ -713,8 +721,9 @@ export function ImportScreen({
                 않습니다.
               </li>
               <li className="text-muted-foreground">
-                등록한 뒤에는 이 화면에서 되돌릴 수 없습니다. 고칠 내용은 ‘
-                {spec.listLabel}’에서 수정해 주세요.
+                등록한 뒤에는 이 화면에서 되돌릴 수 없습니다.{" "}
+                {spec.fixHint ??
+                  `고칠 내용은 ‘${spec.listLabel}’에서 수정해 주세요.`}
               </li>
             </ul>
           </div>
@@ -844,9 +853,16 @@ function SavedPanel({
       <p className="text-sm font-bold">{saved.message}</p>
       {codes.length > 0 && (
         <p className="text-[13px] break-all">
-          <span className="font-bold">등록한 코드:</span> {codes.join(", ")}
+          <span className="font-bold">
+            등록한 {spec.savedCodesLabel ?? "코드"}:
+          </span>{" "}
+          {codes.join(", ")}
           {saved.codes.length > codes.length && (
-            <> 외 {formatNumber(saved.codes.length - codes.length, 0)}개</>
+            <>
+              {" "}
+              외 {formatNumber(saved.codes.length - codes.length, 0)}개
+              {spec.savedCodesLabel ? ` ${spec.savedCodesLabel}` : ""}
+            </>
           )}
         </p>
       )}

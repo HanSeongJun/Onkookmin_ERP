@@ -6,6 +6,7 @@
 
 import type { ImportSpec } from "@/lib/imports/columns"
 import { EMPLOYEE_IMPORT } from "@/lib/imports/employees"
+import { OPENING_STOCK_IMPORT } from "@/lib/imports/opening-stock"
 import { PARTNER_IMPORT } from "@/lib/imports/partners"
 import { PRODUCT_CATEGORY_IMPORT } from "@/lib/imports/product-categories"
 import { PRODUCT_IMPORT } from "@/lib/imports/products"
@@ -16,6 +17,7 @@ export const IMPORT_SPECS: Record<ImportKind, ImportSpec> = {
   products: PRODUCT_IMPORT,
   partners: PARTNER_IMPORT,
   employees: EMPLOYEE_IMPORT,
+  "opening-stock": OPENING_STOCK_IMPORT,
 }
 
 /** The kinds in the sidebar's order (자료일괄등록 group). */
@@ -24,6 +26,7 @@ export const IMPORT_KINDS: readonly ImportKind[] = [
   "products",
   "partners",
   "employees",
+  "opening-stock",
 ]
 
 /** The page address of an import, e.g. "/imports/products". */

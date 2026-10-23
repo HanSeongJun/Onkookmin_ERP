@@ -64,11 +64,24 @@ export const mainNavItems: NavItem[] = [
       { title: "상품 일괄등록", href: "/imports/products" },
       { title: "거래처 일괄등록", href: "/imports/partners" },
       { title: "직원 일괄등록", href: "/imports/employees" },
+      { title: "기초재고 일괄등록", href: "/imports/opening-stock" },
     ],
   },
   {
+    // 재고관리: stock per lot × 위치 (창고 > 구역 > 선반), only for
+    // 기준상품. Reports first, then the 전표 screens, then the settings.
     title: "재고관리",
-    items: [{ title: "재고 관리", href: "/inventory" }],
+    items: [
+      { title: "상품별 재고현황", href: "/inventory" },
+      { title: "재고처별 재고현황", href: "/inventory/locations" },
+      { title: "상품별 거래수불", href: "/inventory/ledger" },
+      { title: "입고 등록", href: "/inventory/receipts" },
+      { title: "출고 등록", href: "/inventory/issues" },
+      { title: "폐기 등록", href: "/inventory/disposals" },
+      { title: "재고처간 이동등록", href: "/inventory/transfers" },
+      { title: "실사재고조정", href: "/inventory/counts" },
+      { title: "창고·로케이션 설정", href: "/inventory/settings" },
+    ],
   },
   { title: "구매·입고", items: [], comingSoon: true },
   { title: "판매·출고", items: [], comingSoon: true },
@@ -85,7 +98,9 @@ export function isNavGroup(item: NavItem): item is NavGroupItem {
  * "/" only matches exactly. Other pages also match the URLs below them, and
  * the closest match wins: "/products/categories" highlights 상품분류설정,
  * while "/products" and "/products/123" highlight 상품관리 (the same for
- * "/partners/categories" → 거래처분류설정 and "/partners" → 거래처관리).
+ * "/partners/categories" → 거래처분류설정 and "/partners" → 거래처관리, and
+ * "/inventory/locations" → 재고처별 재고현황 while "/inventory" highlights
+ * 상품별 재고현황).
  */
 export function getActiveNavHref(pathname: string): string | null {
   let activeHref: string | null = null

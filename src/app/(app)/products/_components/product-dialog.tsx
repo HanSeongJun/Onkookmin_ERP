@@ -685,6 +685,9 @@ export function ProductDialog({
     if (!first) return
     flushSync(() => setTab(FIELD_TABS[first]))
     focusField(first, fieldErrors)
+    // The new tab's panel can become visible a frame later (the focus above
+    // then does nothing and stays on the old tab): focus once more then.
+    requestAnimationFrame(() => focusField(first, fieldErrors))
   }
 
   /** Sends the form to the server and handles the answer. */
@@ -1063,6 +1066,7 @@ export function ProductDialog({
               codeHint={codeHint}
               nameHint={nameHint}
               unitNote={unitNote}
+              unitLocked={isEdit && (product?.hasStockRecords ?? false)}
               isActiveNote={isActiveNote}
               bundleSection={
                 <>

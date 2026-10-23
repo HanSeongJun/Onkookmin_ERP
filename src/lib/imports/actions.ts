@@ -16,6 +16,11 @@ import {
   employeeImportLookupKeys,
 } from "@/lib/imports/employees"
 import {
+  checkOpeningStockImport,
+  OPENING_STOCK_IMPORT,
+  openingStockLookupKeys,
+} from "@/lib/imports/opening-stock"
+import {
   checkPartnerImport,
   PARTNER_IMPORT,
   partnerImportLookupKeys,
@@ -31,6 +36,7 @@ import {
 } from "@/lib/imports/products"
 import {
   findEmployeesForImport,
+  findOpeningStockRefs,
   findPartnersForImport,
   findProductsForImport,
   FUNCTION_NOT_FOUND_CODE,
@@ -103,6 +109,7 @@ const importInputSchema = z.object({
       .max(IMPORT_MAX_ROWS * 2)
   ),
   createMissingCategories: z.boolean().optional(),
+  requestId: z.uuid().optional(),
 })
 
 /**
@@ -140,6 +147,7 @@ function parseInput(
     input: {
       sheets,
       createMissingCategories: parsed.data.createMissingCategories ?? true,
+      requestId: parsed.data.requestId,
     },
   }
 }
@@ -195,6 +203,11 @@ async function prepareEmployees(input: ImportInput) {
     getHighestNumericEmployeeCode(),
   ])
   return checkEmployeeImport(input, { employees, highestNumericCode })
+}
+
+async function prepareOpeningStock(input: ImportInput) {
+  const refs = await findOpeningStockRefs(openingStockLookupKeys(input))
+  return checkOpeningStockImport(input, refs)
 }
 
 /** Runs a check; a database read that fails becomes a Korean message. */
@@ -265,6 +278,10 @@ async function commit<Payload>(
 
 /** What the import functions return (see the migration). */
 type SavedCounts = {
+  /** 기초재고: the 전표번호 made. */
+  docNo: string
+  /** 기초재고: the same request had been saved before (nothing new). */
+  alreadySaved: boolean
   inserted: number
   baseInserted: number
   bundleInserted: number
@@ -284,6 +301,8 @@ function readSavedCounts(data: Json | null): SavedCounts {
     ? object.codes.filter((code): code is string => typeof code === "string")
     : []
   return {
+    docNo: typeof object.doc_no === "string" ? object.doc_no : "",
+    alreadySaved: object.already_saved === true,
     inserted: count("inserted"),
     baseInserted: count("base_inserted"),
     bundleInserted: count("bundle_inserted"),
@@ -461,6 +480,114 @@ export async function commitEmployeeImport(
       }
     }
   )
+}
+
+// ---------------------------------------------------------------------------
+// 기초재고 일괄등록
+// ---------------------------------------------------------------------------
+
+/** 미리보기 of a 기초재고 file. */
+export async function validateOpeningStockImport(
+  input: unknown
+): Promise<ImportValidateResult> {
+  return validate(OPENING_STOCK_IMPORT, input, prepareOpeningStock)
+}
+
+/**
+ * Registers the 정상 rows of a 기초재고 file as ONE 기초재고 전표 dated
+ * today (database: import_opening_stock; all rows or none). `codes` are
+ * the lots' 로트번호 in file order. A file is registered once per
+ * `input.requestId` (one per uploaded file): sent again, the result is the
+ * earlier 전표 (`alreadySaved`), and nothing is registered twice.
+ */
+export async function commitOpeningStockImport(
+  input: unknown,
+  okRowKeys: unknown
+): Promise<ImportCommitResult> {
+  await requireUser()
+  // The same file sent again (a retry after the answer was lost): its 전표,
+  // without checking the rows again (they would now find their own lots).
+  const requestId = readRequestId(input)
+  if (requestId) {
+    const earlier = await findSavedOpeningStock(requestId)
+    if (earlier) return earlier
+  }
+  return commit(
+    OPENING_STOCK_IMPORT,
+    input,
+    okRowKeys,
+    prepareOpeningStock,
+    async (payload) => {
+      const supabase = await createClient()
+      return supabase.rpc("import_opening_stock", {
+        rows: payload.rows,
+        request_id: requestId ?? undefined,
+      })
+    },
+    (saved) => {
+      revalidatePath("/(app)/inventory", "layout")
+      revalidatePath("/")
+      return {
+        ok: true,
+        inserted: saved.inserted,
+        createdCategories: 0,
+        skipped: 0,
+        codes: saved.codes,
+        alreadySaved: saved.alreadySaved,
+        message: saved.alreadySaved
+          ? alreadySavedMessage(saved.docNo, saved.inserted)
+          : `기초재고 ${number(saved.inserted)}건을 등록했습니다.${saved.docNo ? ` (전표번호 ${saved.docNo})` : ""}`,
+      }
+    }
+  )
+}
+
+/** The requestId of an import input, when it is a UUID. */
+function readRequestId(input: unknown): string | null {
+  if (!input || typeof input !== "object") return null
+  const value = (input as { requestId?: unknown }).requestId
+  const parsed = z.uuid().safeParse(value)
+  return parsed.success ? parsed.data.toLowerCase() : null
+}
+
+function alreadySavedMessage(docNo: string, inserted: number): string {
+  return `이 파일은 이미 등록되었습니다 (전표번호 ${docNo}, ${number(inserted)}건). 다시 등록하지 않았습니다.`
+}
+
+/**
+ * The 기초재고 전표 an earlier commit of the same file (requestId) made,
+ * as a commit result; null when there is none (or it cannot be read: then
+ * the database function's own check still saves the file once).
+ */
+async function findSavedOpeningStock(
+  requestId: string
+): Promise<ImportCommitResult | null> {
+  const supabase = await createClient()
+  const { data: document, error } = await supabase
+    .from("stock_documents")
+    .select("id, doc_no")
+    .eq("request_id", requestId)
+    .eq("doc_type", "opening")
+    .maybeSingle()
+  if (error || !document) return null
+  const { data: lines } = await supabase
+    .from("stock_movement_items")
+    .select("lot_no")
+    .eq("document_id", document.id)
+    .order("seq")
+    .limit(IMPORT_MAX_ROWS)
+  const codes = (lines ?? []).flatMap((line) =>
+    line.lot_no ? [line.lot_no] : []
+  )
+  return {
+    ok: true,
+    inserted: codes.length,
+    createdCategories: 0,
+    skipped: 0,
+    codes,
+    alreadySaved: true,
+    message: alreadySavedMessage(document.doc_no, codes.length),
+  }
 }
 
 // ---------------------------------------------------------------------------

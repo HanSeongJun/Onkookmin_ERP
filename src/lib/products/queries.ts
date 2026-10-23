@@ -854,6 +854,37 @@ export type ProductDetail = Tables<"products"> & {
   components: BundleComponent[]
   /** 기준상품: the 묶음상품 that contain it. Empty for a 묶음상품. */
   bundles: ContainingBundle[]
+  /**
+   * The product has stock records (a 기준상품's 재고 로트, a 묶음상품's
+   * 입고·출고 lines): its 단위 can no longer change (the database refuses,
+   * PRODUCT_DB_RULES.unitHasStock).
+   */
+  hasStockRecords: boolean
+}
+
+/**
+ * Whether a product has stock records (see ProductDetail.hasStockRecords).
+ * False when they cannot be read (e.g. the 재고 migration is not applied
+ * yet: then there is no stock either).
+ */
+async function productHasStockRecords(
+  id: string,
+  isBundle: boolean
+): Promise<boolean> {
+  const supabase = await createClient()
+  const { data, error } = isBundle
+    ? await supabase
+        .from("stock_movements")
+        .select("id")
+        .eq("bundle_id", id)
+        .limit(1)
+    : await supabase
+        .from("stock_lots")
+        .select("id")
+        .eq("product_id", id)
+        .limit(1)
+  if (error) return false
+  return data.length > 0
 }
 
 /**
@@ -881,9 +912,10 @@ export const getProduct = cache(
     if (!product) return null
 
     const isBundle = product.product_type === "bundle"
-    const [components, bundles] = await Promise.all([
+    const [components, bundles, hasStockRecords] = await Promise.all([
       isBundle ? getBundleComponents(product.id) : [],
       isBundle ? [] : getBundlesContainingProduct(product.id),
+      productHasStockRecords(product.id, isBundle),
     ])
 
     const path =
@@ -909,6 +941,7 @@ export const getProduct = cache(
           },
       components,
       bundles,
+      hasStockRecords,
     }
   }
 )

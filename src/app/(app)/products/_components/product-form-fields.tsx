@@ -179,6 +179,7 @@ export function ProductCommonFields({
   codeHint,
   nameHint,
   unitNote,
+  unitLocked = false,
   isActiveNote,
   categories,
   savedCategoryId,
@@ -201,6 +202,8 @@ export function ProductCommonFields({
   nameHint?: React.ReactNode
   /** Warning shown instead of 단위's hint (e.g. 묶음상품 use this unit). */
   unitNote?: React.ReactNode
+  /** 상품 수정 of a product with stock records: the 단위 cannot change. */
+  unitLocked?: boolean
   /** Note under 사용 여부 (e.g. 묶음상품 switched off together). */
   isActiveNote?: React.ReactNode
   /** All categories, including switched-off ones. */
@@ -269,7 +272,12 @@ export function ProductCommonFields({
                 placeholder={isBundle ? "예: 1.81kg×6" : "예: 1kg, 500g×20입"}
                 maxLength={PRODUCT_LIMITS.specMaxLength}
               />
-              <UnitRow form={form} isBundle={isBundle} note={unitNote} />
+              <UnitRow
+                form={form}
+                isBundle={isBundle}
+                note={unitNote}
+                locked={unitLocked}
+              />
               {!isBundle && (
                 <>
                   <ChoiceRow
@@ -475,16 +483,19 @@ function ProductTypeRow({
 
 /**
  * 단위: a select of UNITS (a saved unit no longer in the list still shows).
- * `note` (a warning) replaces the usual hint.
+ * `note` (a warning) replaces the usual hint. `locked`: the product has
+ * stock records, so the 단위 cannot change (the database refuses it too).
  */
 function UnitRow({
   form,
   isBundle,
   note,
+  locked,
 }: {
   form: ProductFormApi
   isBundle: boolean
   note?: React.ReactNode
+  locked: boolean
 }) {
   return (
     <Controller
@@ -503,9 +514,11 @@ function UnitRow({
             required
             hint={
               note ??
-              (isBundle
-                ? "이 묶음상품을 세는 단위 (예: 묶음, 박스, 세트)"
-                : "재고·주문을 세는 단위")
+              (locked
+                ? `재고 기록이 있어 단위를 바꿀 수 없습니다. 재고 수량과 수불이 모두 ‘${field.value}’ 단위로 기록되어 있습니다.`
+                : isBundle
+                  ? "이 묶음상품을 세는 단위 (예: 묶음, 박스, 세트)"
+                  : "재고·주문을 세는 단위")
             }
             error={fieldState.error?.message}
             errorId={`${id}-error`}
@@ -514,6 +527,7 @@ function UnitRow({
               items={units.map((unit) => ({ value: unit, label: unit }))}
               value={field.value || null}
               onValueChange={(value) => field.onChange(value ?? "")}
+              disabled={locked}
             >
               <SelectTrigger
                 id={id}
