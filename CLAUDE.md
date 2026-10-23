@@ -45,6 +45,7 @@ npm run db:types       # regenerate src/types/database.ts from the linked hosted
 
 - **Hosted project** = the real company database. `.env.local` points the app at it; never edit `.env.local`. `db:push`/`db:types` need `npx supabase login` and a one-time `npx supabase link --project-ref <id>`.
   - `npm run db:push` changes the real database: show the owner the migration and get an explicit OK before running it. After a push, `npm run db:types` must produce the same `src/types/database.ts` as the local command below.
+  - After `src/types/database.ts` changes (db:types or a local regen), **restart the owner's long-running `next dev`** (`lsof -ti tcp:3001 -sTCP:LISTEN | xargs kill`, `rm -rf .next/dev`, start again). On 2026-10-23 a dev server running since the day before kept an old `database.ts` module, so `z.enum(Constants.public.Enums.expiry_kind)` saw `undefined` and the dashboard crashed with "Cannot convert undefined or null to object" although the file and `npm run build` were fine.
   - Hosted settings (auth, sign-up) are changed in the Supabase dashboard; `supabase/config.toml` does not affect the hosted project.
 - **Local stack** = a throwaway copy of Supabase running in Docker (OrbStack) on this Mac, for developing and testing migrations. `supabase/config.toml` configures it.
   - Start/stop is done by the owner: `npx supabase start` / `npx supabase stop` (first start downloads images and can take ~15 minutes). Check it with `npx supabase status` (`-o env` prints the local URLs and keys).
