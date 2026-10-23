@@ -1,26 +1,150 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@custom-variant dark (&:is(.dark *));
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* Paperlogy is loaded in src/app/layout.tsx as --font-paperlogy
+     (Regular 400 for body text, Bold 700 for titles, labels and buttons).
+     The rest of the list is a fallback for Korean text while it loads. */
+  --font-sans:
+    var(--font-paperlogy), -apple-system, BlinkMacSystemFont, system-ui,
+    "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+  --font-heading:
+    var(--font-paperlogy), -apple-system, BlinkMacSystemFont, system-ui,
+    "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+
+  /* ERP colors (company brand #475a19), usable as Tailwind classes,
+     e.g. bg-brand, hover:bg-brand-hover, bg-brand-tint, border-grid-line,
+     bg-label, bg-neutral-button, bg-required. Values are in :root below. */
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-hover: var(--brand-hover);
+  --color-brand-active: var(--brand-active);
+  --color-brand-tint: var(--brand-tint);
+  --color-brand-tint-strong: var(--brand-tint-strong);
+  --color-brand-border: var(--brand-border);
+  --color-canvas: var(--canvas);
+  --color-grid-line: var(--grid-line);
+  --color-label: var(--label);
+  --color-zebra: var(--zebra);
+  --color-row-hover: var(--row-hover);
+  --color-neutral-button: var(--neutral-button);
+  --color-neutral-button-hover: var(--neutral-button-hover);
+  --color-required: var(--required);
+
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/*
+ * Light theme only (the app has no dark mode).
+ * Contrast (WCAG): white text on --brand is 7.65:1, on --brand-hover 9.53:1;
+ * --brand text on --brand-tint 6.72:1; --muted-foreground on white 5.74:1;
+ * white on --neutral-button 6.69:1; --destructive on white 5.62:1.
+ */
+:root {
+  /* Company brand color and its shades */
+  --brand: #475a19;
+  --brand-foreground: #ffffff;
+  --brand-hover: #3b4b15; /* buttons on hover */
+  --brand-active: #2f3c10; /* pressed buttons, dark text on tints */
+  --brand-tint: #eef2e3; /* selected rows, active menu item */
+  --brand-tint-strong: #e4ebd2; /* hover on menu items and tinted rows */
+  --brand-border: #a8b68a; /* light brand-colored lines */
+
+  /* ERP screen parts */
+  --canvas: #eceee8; /* page background around the white work area */
+  --grid-line: #d9d9d9; /* thin lines of tables and forms */
+  --label: #f3f3f3; /* grey label cells in search and input forms */
+  --zebra: #fafafa; /* every second table row */
+  --row-hover: #f4f7ec; /* table row under the mouse */
+  --neutral-button: #5c5c5c; /* dark grey buttons (취소, 사용중지 ...) */
+  --neutral-button-hover: #474747;
+  --required: #e53935; /* red dot before required fields */
+
+  /* shadcn/ui tokens, mapped to the palette above */
+  --background: #ffffff;
+  --foreground: #222222;
+  --card: #ffffff;
+  --card-foreground: #222222;
+  --popover: #ffffff;
+  --popover-foreground: #222222;
+  --primary: var(--brand);
+  --primary-foreground: var(--brand-foreground);
+  --secondary: #f1f2ee;
+  --secondary-foreground: #2b2b2b;
+  --muted: #f4f5f1;
+  --muted-foreground: #666666;
+  --accent: var(--brand-tint);
+  --accent-foreground: var(--brand-active);
+  --destructive: #c62828;
+  --border: var(--grid-line);
+  --input: #bfbfbf;
+  --ring: var(--brand);
+  --chart-1: #475a19;
+  --chart-2: #7a8f3c;
+  --chart-3: #a8b68a;
+  --chart-4: #c9a227;
+  --chart-5: #5c5c5c;
+  --radius: 0.25rem;
+  --sidebar: #f5f6f2;
+  --sidebar-foreground: #222222;
+  --sidebar-primary: var(--brand);
+  --sidebar-primary-foreground: var(--brand-foreground);
+  --sidebar-accent: var(--brand-tint-strong);
+  --sidebar-accent-foreground: var(--brand-active);
+  --sidebar-border: var(--grid-line);
+  --sidebar-ring: var(--brand);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
   }
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  body {
+    /* break-keep: wrap Korean text between words, not in the middle of a word.
+       wrap-break-word: still break a single word that is too long to fit. */
+    @apply bg-background text-sm wrap-break-word break-keep text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
 }

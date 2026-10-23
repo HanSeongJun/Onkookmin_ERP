@@ -1,0 +1,19 @@
+# dependencies and build output
+node_modules
+.next
+out
+build
+
+# lock file
+package-lock.json
+
+# Supabase CLI local state
+supabase/.temp
+supabase/.branches
+
+# generated files (overwritten by tools)
+src/types/database.ts
+next-env.d.ts
+
+# shadcn/ui components: vendored by `npx shadcn add`, keep their upstream formatting
+src/components/ui

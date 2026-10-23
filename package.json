@@ -6,12 +6,37 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "next typegen && tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run typecheck && npm run lint && npm run format:check",
+    "db:new": "supabase migration new",
+    "db:push": "supabase db push",
+    "db:types": "mkdir -p supabase/.temp && supabase gen types typescript --linked --schema public > supabase/.temp/database.ts.tmp && mv supabase/.temp/database.ts.tmp src/types/database.ts"
   },
   "dependencies": {
+    "@base-ui/react": "^1.9.0",
+    "@hookform/resolvers": "^5.9.2",
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.118.0",
+    "@tanstack/react-table": "^9.3.1",
+    "class-variance-authority": "^0.7.1",
+    "cn": "^0.5.0",
+    "date-fns": "^4.4.0",
+    "lucide-react": "^1.60.0",
     "next": "16.4.2",
+    "next-themes": "^0.4.6",
+    "pretendard": "^1.3.9",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "react-hook-form": "^7.90.0",
+    "read-excel-file": "9.3.12",
+    "shadcn": "^4.22.1",
+    "sonner": "^2.0.8",
+    "tw-animate-css": "^1.4.0",
+    "write-excel-file": "4.1.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",
@@ -20,6 +45,9 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.4.2",
+    "prettier": "^3.9.10",
+    "prettier-plugin-tailwindcss": "^0.8.1",
+    "supabase": "^2.121.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
