@@ -36,6 +36,8 @@ export type StockDocumentListData =
       pageCount: number
       /** 기한 임박 기준일 (재고 설정), for the D-day badges. */
       expiryWarningDays: number
+      /** 전표 일자 허용 범위 (재고 설정): today + this many days. */
+      futureDocDays: number
       /** Names of the 상품 / 거래처 conditions from the URL (for the chips). */
       filterLabels: { product: string | null; partner: string | null }
     }
@@ -44,7 +46,8 @@ export type StockDocumentListData =
 /**
  * Reads one page of a 전표 screen's list for its page (Server Component,
  * inside <Suspense>): checks the login, reads the URL's conditions, the
- * 전표 of the screen's kinds, the 기한 임박 기준일 and the names of the
+ * 전표 of the screen's kinds, the 재고 설정 (기한 임박 기준일, 전표 일자
+ * 허용 범위) and the names of the
  * 상품 / 거래처 conditions. `{ ok: false }` with the Korean notice when the
  * 재고 migration is not applied yet.
  *
@@ -80,6 +83,7 @@ export async function loadStockDocumentListData(
       total: list.total,
       pageCount: list.pageCount,
       expiryWarningDays: settings.expiryWarningDays,
+      futureDocDays: settings.futureDocDays,
       filterLabels: {
         product: product ? `${product.code} ${product.name}` : null,
         partner,

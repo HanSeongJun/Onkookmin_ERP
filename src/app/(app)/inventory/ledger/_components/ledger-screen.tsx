@@ -254,7 +254,33 @@ export function LedgerScreen({
                 기준상품으로 나뉘어 기록되니, 구성 기준상품을 골라 보세요.
               </p>
             ) : (
-              <LedgerGrid ledger={ledger} />
+              <>
+                {ledger.laterLines && (
+                  <p className="flex flex-wrap items-center gap-x-2 gap-y-1 border border-dashed border-brand bg-brand-tint px-3 py-2 text-[13px] text-brand-active">
+                    <span>
+                      조회기간 뒤에 오늘 이후 날짜의{" "}
+                      <strong className="font-bold">
+                        예정 수불 {formatNumber(ledger.laterLines.count, 0)}줄
+                      </strong>
+                      이 있습니다 (마지막 {ledger.laterLines.lastDate}).
+                      재고처별 재고현황의 수량에는 이미 반영되어 있습니다.
+                    </span>
+                    <ActionButton
+                      size="sm"
+                      variant="secondary"
+                      onClick={() =>
+                        openLedger({
+                          ...shown,
+                          to: ledger.laterLines?.lastDate ?? shown.to,
+                        })
+                      }
+                    >
+                      예정까지 보기
+                    </ActionButton>
+                  </p>
+                )}
+                <LedgerGrid ledger={ledger} />
+              </>
             )}
           </>
         ) : (
@@ -272,7 +298,9 @@ export function LedgerScreen({
         취소 전표는 원래 전표의 반대 줄(예: 출고취소 = 입고)로 보입니다.
         전표번호를 누르면 그 전표가 열립니다. 위의 입고·출고·조정·폐기·이동은
         상품별 재고현황과 같은 기준이라(취소는 원래 구분에서 빠짐), 표의
-        입고·출고 칸(들어오고 나간 줄 전부)을 더한 값과 다를 수 있습니다.
+        입고·출고 칸(들어오고 나간 줄 전부)을 더한 값과 다를 수 있습니다. 오늘
+        이후 날짜의 줄(예: 내일 새벽배송 출고)에는 ‘예정’이 붙습니다. 조회기간을
+        [내일까지]처럼 오늘 이후까지 넓히면 보입니다.
       </p>
 
       {pickerOpen && (

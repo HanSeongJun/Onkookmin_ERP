@@ -55,6 +55,8 @@ import {
   type ImportPreview,
   type ImportValidateResult,
 } from "@/lib/imports/types"
+import { isScheduledDate } from "@/lib/inventory/constants"
+import { todayInKorea } from "@/lib/inventory/schema"
 import { createClient } from "@/lib/supabase/server"
 import type { Json } from "@/types/database"
 
@@ -280,6 +282,8 @@ async function commit<Payload>(
 type SavedCounts = {
   /** 기초재고: the 전표번호 made. */
   docNo: string
+  /** 기초재고: the 전표 date ("" when not returned). */
+  docDate: string
   /** 기초재고: the same request had been saved before (nothing new). */
   alreadySaved: boolean
   inserted: number
@@ -302,6 +306,7 @@ function readSavedCounts(data: Json | null): SavedCounts {
     : []
   return {
     docNo: typeof object.doc_no === "string" ? object.doc_no : "",
+    docDate: typeof object.doc_date === "string" ? object.doc_date : "",
     alreadySaved: object.already_saved === true,
     inserted: count("inserted"),
     baseInserted: count("base_inserted"),
@@ -536,7 +541,11 @@ export async function commitOpeningStockImport(
         alreadySaved: saved.alreadySaved,
         message: saved.alreadySaved
           ? alreadySavedMessage(saved.docNo, saved.inserted)
-          : `기초재고 ${number(saved.inserted)}건을 등록했습니다.${saved.docNo ? ` (전표번호 ${saved.docNo})` : ""}`,
+          : `기초재고 ${number(saved.inserted)}건을 등록했습니다.${saved.docNo ? ` (전표번호 ${saved.docNo})` : ""}${
+              isScheduledDate(saved.docDate, todayInKorea())
+                ? ` 입고일이 오늘 이후라 ${saved.docDate} 날짜의 예정 기초재고로 등록했습니다. 이 재고는 그 날짜부터 출고할 수 있습니다.`
+                : ""
+            }`,
       }
     }
   )

@@ -1,6 +1,7 @@
 import Link from "next/link"
 
 import { stockDocumentHref } from "@/components/inventory/document-screens"
+import { ScheduledBadge } from "@/components/inventory/scheduled-badge"
 import {
   DataGrid,
   DataGridBody,
@@ -18,10 +19,15 @@ import {
   type StockDocumentType,
 } from "@/lib/inventory/constants"
 import type { StockLedger, StockLedgerLine } from "@/lib/inventory/queries"
+import { todayInKorea } from "@/lib/inventory/schema"
 import { cn } from "@/lib/utils"
 
 /** Number of columns (for the full-width empty row). */
 const COLUMN_COUNT = 12
+
+/** Tooltip of a line whose 전표 was undone on its own date. */
+const SAME_DAY_CANCELLED_TITLE =
+  "같은 날 취소된 전표의 줄입니다. 그날 재고에 영향이 없어 잔량이 바뀌지 않습니다 (예: 고객이 취소한 내일 새벽배송 출고)."
 
 /** Badge colors of the 구분 column. */
 const TYPE_CLASSES: Record<StockDocumentType, string> = {
@@ -38,10 +44,15 @@ const TYPE_CLASSES: Record<StockDocumentType, string> = {
  * 상품별 거래수불 as a dense grid: the 이월 line (stock at the end of the
  * day before the 조회기간), every ledger line in date order with its 잔량,
  * and a 합계 line (sticky at the bottom). The 전표번호 opens that 전표 on
- * its screen (보기 window with [취소]).
+ * its screen (보기 window with [취소]). Lines dated after today (예정
+ * 전표, e.g. tomorrow's 새벽배송 출고) carry an "예정" badge. Lines of a
+ * 전표 undone on its own date (and its 취소 lines) are marked "당일취소"
+ * and leave the 잔량 unchanged (the database's rule, see
+ * stock_history_lines).
  */
 export function LedgerGrid({ ledger }: { ledger: StockLedger }) {
   const unit = ledger.product.unit
+  const today = todayInKorea()
   const totalClass =
     "sticky bottom-0 z-[5] border-t-2 border-t-foreground/70 bg-label font-bold"
 
@@ -53,7 +64,7 @@ export function LedgerGrid({ ledger }: { ledger: StockLedger }) {
     >
       <DataGridHeader>
         <tr>
-          <DataGridHead className="w-24">일자</DataGridHead>
+          <DataGridHead className="w-32">일자</DataGridHead>
           <DataGridHead className="w-40">전표번호</DataGridHead>
           <DataGridHead className="w-24">구분</DataGridHead>
           <DataGridHead className="min-w-32">거래처</DataGridHead>
@@ -96,7 +107,7 @@ export function LedgerGrid({ ledger }: { ledger: StockLedger }) {
           </DataGridEmpty>
         )}
         {ledger.lines.map((line) => (
-          <LedgerRow key={line.movementId} line={line} />
+          <LedgerRow key={line.movementId} line={line} today={today} />
         ))}
       </DataGridBody>
       <tfoot>
@@ -130,7 +141,7 @@ export function LedgerGrid({ ledger }: { ledger: StockLedger }) {
 }
 
 /** One ledger line. */
-function LedgerRow({ line }: { line: StockLedgerLine }) {
+function LedgerRow({ line, today }: { line: StockLedgerLine; today: string }) {
   const kind = movementLabel(line.movementType, line.isReversal)
   const memo = [
     line.reason ? `사유: ${disposalReasonLabel(line.reason)}` : null,
@@ -146,7 +157,10 @@ function LedgerRow({ line }: { line: StockLedgerLine }) {
   return (
     <DataGridRow>
       <DataGridCell align="center" className="tabular-nums">
-        {line.docDate}
+        <span className="inline-flex items-center gap-1">
+          {line.docDate}
+          <ScheduledBadge date={line.docDate} today={today} />
+        </span>
       </DataGridCell>
       <DataGridCell align="center" className="tabular-nums">
         {documentHref ? (
@@ -163,13 +177,23 @@ function LedgerRow({ line }: { line: StockLedgerLine }) {
         )}
       </DataGridCell>
       <DataGridCell align="center">
-        <span
-          className={cn(
-            "inline-flex h-5 items-center rounded-sm px-1.5 text-xs font-bold",
-            TYPE_CLASSES[line.isReversal ? "reversal" : line.movementType]
+        <span className="inline-flex items-center gap-1">
+          <span
+            className={cn(
+              "inline-flex h-5 items-center rounded-sm px-1.5 text-xs font-bold",
+              TYPE_CLASSES[line.isReversal ? "reversal" : line.movementType]
+            )}
+          >
+            {kind}
+          </span>
+          {line.sameDayCancelled && (
+            <span
+              title={SAME_DAY_CANCELLED_TITLE}
+              className="text-[11px] whitespace-nowrap text-muted-foreground"
+            >
+              당일취소
+            </span>
           )}
-        >
-          {kind}
         </span>
       </DataGridCell>
       <DataGridCell
@@ -196,13 +220,23 @@ function LedgerRow({ line }: { line: StockLedgerLine }) {
       >
         {place}
       </DataGridCell>
-      <DataGridCell numeric>
+      <DataGridCell
+        numeric
+        className={cn(line.sameDayCancelled && "text-muted-foreground")}
+      >
         {line.inQty !== 0 ? formatNumber(line.inQty, 3) : ""}
       </DataGridCell>
-      <DataGridCell numeric>
+      <DataGridCell
+        numeric
+        className={cn(line.sameDayCancelled && "text-muted-foreground")}
+      >
         {line.outQty !== 0 ? formatNumber(line.outQty, 3) : ""}
       </DataGridCell>
-      <DataGridCell numeric className="font-bold">
+      <DataGridCell
+        numeric
+        className="font-bold"
+        title={line.sameDayCancelled ? SAME_DAY_CANCELLED_TITLE : undefined}
+      >
         {formatNumber(line.balance, 3)}
       </DataGridCell>
       <DataGridCell numeric>

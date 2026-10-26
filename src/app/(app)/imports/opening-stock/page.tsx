@@ -21,7 +21,8 @@ const linkClassName =
  * "/imports/opening-stock": 기초재고 일괄등록 (sidebar: 자료일괄등록 →
  * 기초재고 일괄등록). The stock on hand when the company starts using
  * 재고관리: one row = one lot of a 기준상품 at one 창고 > 구역 > 선반.
- * Registering makes ONE 기초재고 전표 dated today for the 정상 rows (오류
+ * Registering makes ONE 기초재고 전표 dated today (or the latest future
+ * 입고일, a 예정 기초재고) for the 정상 rows (오류
  * rows are left out); that save is all or nothing (database:
  * import_opening_stock), and the same file is registered once even when
  * 등록 is sent again (request id per file). A wrong 기초재고 is undone
@@ -35,7 +36,7 @@ export default function OpeningStockImportPage() {
   return (
     <ImportPage
       spec={OPENING_STOCK_IMPORT}
-      description="재고관리를 처음 시작할 때, 지금 창고에 있는 재고를 엑셀 파일로 한 번에 넣습니다. 오늘 날짜의 기초재고 전표 하나로 등록됩니다."
+      description="재고관리를 처음 시작할 때, 지금 창고에 있는 재고를 엑셀 파일로 한 번에 넣습니다. 오늘 날짜의 기초재고 전표 하나로 등록됩니다(입고일이 오늘 이후인 행이 있으면 가장 늦은 입고일 날짜의 예정 전표)."
       validate={validateOpeningStockImport}
       commit={commitOpeningStockImport}
       notes={

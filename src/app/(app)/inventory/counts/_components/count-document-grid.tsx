@@ -11,7 +11,9 @@ import {
   DataGridRow,
 } from "@/components/erp/data-grid"
 import { EMPTY_VALUE, formatDateTime, formatNumber } from "@/lib/format"
+import { ScheduledBadge } from "@/components/inventory/scheduled-badge"
 import type { StockDocumentRow } from "@/lib/inventory/queries"
+import { todayInKorea } from "@/lib/inventory/schema"
 import { cn } from "@/lib/utils"
 
 const COLUMN_COUNT = 10
@@ -43,6 +45,7 @@ export function CountDocumentGrid({
   function focusRow(element: Element | null | undefined) {
     if (element instanceof HTMLElement) element.focus()
   }
+  const today = todayInKorea()
 
   return (
     <DataGrid
@@ -52,7 +55,7 @@ export function CountDocumentGrid({
     >
       <DataGridHeader>
         <tr>
-          <DataGridHead rowSpan={2} className="w-24">
+          <DataGridHead rowSpan={2} className="w-32">
             전표일자
           </DataGridHead>
           <DataGridHead rowSpan={2} className="w-36">
@@ -128,7 +131,10 @@ export function CountDocumentGrid({
               )}
             >
               <DataGridCell align="center" className="tabular-nums">
-                {row.docDate}
+                <span className="inline-flex items-center gap-1">
+                  {row.docDate}
+                  <ScheduledBadge date={row.docDate} today={today} />
+                </span>
               </DataGridCell>
               <DataGridCell align="center">
                 <button

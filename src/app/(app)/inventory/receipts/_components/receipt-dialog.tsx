@@ -62,6 +62,7 @@ import {
   ProductTypeBadge,
   StockProductPickerDialog,
 } from "@/components/inventory/stock-product-picker-dialog"
+import { ScheduledBadge } from "@/components/inventory/scheduled-badge"
 import { storageMismatchText } from "@/components/inventory/storage-fit"
 import { useFocusAfterAppend } from "@/components/inventory/use-focus-after-append"
 import { useNewModalStillShown } from "@/components/inventory/use-new-modal-still-shown"
@@ -81,9 +82,11 @@ import {
   type StockSaveResult,
 } from "@/lib/inventory/actions"
 import {
+  docDateLimitHint,
   EXPIRY_KINDS,
   expiryKindLabel,
   formatStockQuantity,
+  maxDocDate,
   STOCK_LIMITS,
   storageFit,
   suggestExpiryDate,
@@ -95,7 +98,8 @@ import type {
 } from "@/lib/inventory/queries"
 import {
   emptyReceiptLineInput,
-  receiptFormSchema,
+  isCalendarDate,
+  makeReceiptFormSchema,
   todayInKorea,
   type ReceiptFormInput,
   type ReceiptFormValues,
@@ -165,16 +169,19 @@ type SaveWarnings = {
 }
 
 /**
- * The days left (from today, Korea) of the 기한 a 입고 line's lots get: the
- * earliest of its 기준상품 (a 묶음상품 may get one per 구성상품), or null.
+ * The days left of the 기한 a 입고 line's lots get, counted from the 입고일
+ * (`receivedDate`, the 전표 date; a 예정 입고 of tomorrow counts from
+ * tomorrow): the earliest of its 기준상품 (a 묶음상품 may get one per
+ * 구성상품), or null.
  */
 function earliestExpiry(
-  preview: ReturnType<typeof receiptLineParts> | null
+  preview: ReturnType<typeof receiptLineParts> | null,
+  receivedDate: string
 ): { date: string; daysLeft: number } | null {
   let earliest: { date: string; daysLeft: number } | null = null
   for (const part of preview?.parts ?? []) {
     if (!part.expiryDate) continue
-    const daysLeft = daysUntil(part.expiryDate)
+    const daysLeft = daysUntil(part.expiryDate, receivedDate)
     if (daysLeft === null) continue
     if (!earliest || daysLeft < earliest.daysLeft) {
       earliest = { date: part.expiryDate, daysLeft }
@@ -191,7 +198,9 @@ const EXPIRY_KIND_OPTIONS = EXPIRY_KINDS.map(({ value, label }) => ({
 /**
  * 입고 등록 modal (?modal=new on /inventory/receipts).
  *
- * - 머리: 입고일 (default today; earlier dates allowed, never later), 매입처
+ * - 머리: 입고일 (default today; earlier dates allowed, later ones up to
+ *   today + the 재고 설정's days = a 예정 입고, whose stock no 전표 dated
+ *   before it can use), 매입처
  *   (매입처 / 매출·매입 거래처, optional), 기본 입고 위치 (filled into new
  *   lines), 메모.
  * - 줄: [상품 추가] opens the product picker (기준상품 and 묶음상품). Each
@@ -204,9 +213,9 @@ const EXPIRY_KIND_OPTIONS = EXPIRY_KINDS.map(({ value, label }) => ({
  * - 보관온도: a 구역 of another 보관온도 is marked on the line; saving asks
  *   first (red when the 구역 is too warm).
  * - 기한: the 기한일 shows its D-day badge (기한 경과 red, 기한 임박 amber,
- *   from today); saving asks first when a lot is already past its 기한 or
- *   near it (it is saved anyway when confirmed — e.g. 반품 or a typo the
- *   user wants to keep).
+ *   counted from the 입고일); saving asks first when a lot is already past
+ *   its 기한 on the 입고일 or near it (it is saved anyway when confirmed —
+ *   e.g. 반품 or a typo the user wants to keep).
  * - Columns: 줄 and 상품 stay pinned on the left; 수량 and 입고단가 come
  *   right after them, the rarely used 공급처 로트 / 원산지 / 메모 last.
  * - F8 = 저장; Enter moves to the next box. The database checks everything
@@ -216,9 +225,11 @@ export function ReceiptDialog({
   onClose,
   onSaved,
   expiryWarningDays,
+  futureDocDays,
 }: StockNewDialogProps) {
   const [requestId] = useState(() => newRequestId())
   const today = todayInKorea()
+  const [schema] = useState(() => makeReceiptFormSchema(futureDocDays))
   const places = useStockPlaces()
   const isStillShown = useNewModalStillShown()
 
@@ -244,7 +255,7 @@ export function ReceiptDialog({
   const submittingRef = useRef(false)
 
   const form = useForm<ReceiptFormInput, unknown, ReceiptFormValues>({
-    resolver: zodResolver(receiptFormSchema),
+    resolver: zodResolver(schema),
     defaultValues: {
       requestId,
       docDate: today,
@@ -265,6 +276,8 @@ export function ReceiptDialog({
   })
   const lines = useWatch({ control, name: "lines" })
   const docDate = useWatch({ control, name: "docDate" })
+  // The 입고일 the D-day badges count from (today while the box is empty).
+  const receivedDate = isCalendarDate(docDate) ? docDate : today
   const focusLine = useFocusAfterAppend(FORM_ID, fields.length)
 
   // Closing the tab or reloading with unsaved lines: the browser asks first.
@@ -510,15 +523,19 @@ export function ReceiptDialog({
     return found
   }
 
-  /** Lots whose 기한 is past or within the 기한 임박 기준일 (from today). */
+  /**
+   * Lots whose 기한 is past or within the 기한 임박 기준일, counted from the
+   * 입고일 (the 전표 date: a 예정 입고 of tomorrow from tomorrow).
+   */
   function expiryWarnings(values: ReceiptFormInput): ExpiryWarning[] {
     const found: ExpiryWarning[] = []
+    const receivedDate = isCalendarDate(values.docDate) ? values.docDate : today
     values.lines.forEach((line, index) => {
       const product = products.get(line.productId)
       if (!product || line.expiryKind === "none") return
       for (const part of receiptLineParts(product, line, taxTypes).parts) {
         if (!part.expiryDate) continue
-        const daysLeft = daysUntil(part.expiryDate)
+        const daysLeft = daysUntil(part.expiryDate, receivedDate)
         if (daysLeft === null || daysLeft > expiryWarningDays) continue
         found.push({
           line: index + 1,
@@ -692,12 +709,12 @@ export function ReceiptDialog({
                 required
                 error={errors.docDate?.message}
                 errorId={fieldErrorId(FORM_ID, "docDate")}
-                hint="오늘 이후는 안 됩니다"
+                hint={docDateLimitHint(futureDocDays, today)}
               >
                 <Input
                   id={fieldDomId(FORM_ID, "docDate")}
                   type="date"
-                  max={today}
+                  max={maxDocDate(futureDocDays, today)}
                   aria-required
                   aria-invalid={!!errors.docDate}
                   aria-describedby={
@@ -707,6 +724,11 @@ export function ReceiptDialog({
                   }
                   className="h-8 w-40 rounded-sm"
                   {...register("docDate")}
+                />
+                <ScheduledBadge
+                  date={docDate}
+                  today={today}
+                  title="오늘 이후 날짜: 예정 입고로 저장됩니다. 이 재고는 그 날짜부터 출고·이동할 수 있습니다."
                 />
               </FormRow>
               <FormRow
@@ -829,7 +851,12 @@ export function ReceiptDialog({
                 <DataGridHead className="w-56">위치</DataGridHead>
                 <DataGridHead className="w-36">제조일자</DataGridHead>
                 <DataGridHead className="w-24">기한 종류</DataGridHead>
-                <DataGridHead className="w-52">기한일</DataGridHead>
+                <DataGridHead
+                  className="w-52"
+                  title="D-day는 입고일부터 셉니다."
+                >
+                  기한일
+                </DataGridHead>
                 <DataGridHead className="w-32">로트번호</DataGridHead>
                 <DataGridHead className="w-28">금액(포함)</DataGridHead>
                 <DataGridHead className="w-28">금액(별도)</DataGridHead>
@@ -869,7 +896,9 @@ export function ReceiptDialog({
                     autoExpiry[field.id] === line.expiryDate
                   const lineLabel = `${index + 1}번째 줄`
                   const expiry =
-                    line.expiryKind === "none" ? null : earliestExpiry(preview)
+                    line.expiryKind === "none"
+                      ? null
+                      : earliestExpiry(preview, receivedDate)
                   return (
                     <ReceiptLineRows
                       key={field.id}
@@ -1257,6 +1286,11 @@ export function ReceiptDialog({
         <ReceiptWarningDialog
           warnings={warnings}
           warningDays={expiryWarningDays}
+          receivedDate={
+            isCalendarDate(warnings.input.docDate)
+              ? warnings.input.docDate
+              : today
+          }
           pending={isPending}
           onCancel={() => setWarnings(null)}
           onConfirm={() => {
@@ -1404,12 +1438,15 @@ function BundleConversion({
 function ReceiptWarningDialog({
   warnings,
   warningDays,
+  receivedDate,
   pending,
   onCancel,
   onConfirm,
 }: {
   warnings: SaveWarnings
   warningDays: number
+  /** The 입고일 the 기한 are counted from. */
+  receivedDate: string
   pending: boolean
   onCancel: () => void
   onConfirm: () => void
@@ -1458,8 +1495,9 @@ function ReceiptWarningDialog({
                   기한 임박({warningDays}일 이내) 로트 {imminentCount}건
                 </strong>
               )}
-              이 있습니다. 기한일을 잘못 넣지 않았는지 확인해 주세요. 기한이
-              지난 재고는 출고(FEFO)에서 빠집니다.
+              이 있습니다(입고일 {receivedDate} 기준). 기한일을 잘못 넣지
+              않았는지 확인해 주세요. 기한이 지난 재고는 출고(FEFO)에서
+              빠집니다.
             </p>
             <ul className="flex max-h-48 flex-col gap-1 overflow-y-auto border border-grid-line p-2 text-[13px]">
               {expiry.map((warning, index) => (

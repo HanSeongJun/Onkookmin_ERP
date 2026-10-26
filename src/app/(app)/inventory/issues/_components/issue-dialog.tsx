@@ -45,6 +45,7 @@ import {
 } from "@/components/inventory/line-table-parts"
 import { StockQuantityInput } from "@/components/inventory/number-inputs"
 import { placeFilterIds } from "@/components/inventory/place-tree"
+import { ScheduledBadge } from "@/components/inventory/scheduled-badge"
 import type { StockNewDialogProps } from "@/components/inventory/stock-document-list-screen"
 import { StockPartnerField } from "@/components/inventory/stock-partner-field"
 import { StockPlaceField } from "@/components/inventory/stock-place-field"
@@ -60,18 +61,27 @@ import { Input } from "@/components/ui/input"
 import { useHotkeys } from "@/hooks/use-hotkeys"
 import {
   createIssue,
+  loadIssueAvailability,
   previewIssue,
   type IssuePlan,
   type StockSaveResult,
 } from "@/lib/inventory/actions"
-import { formatStockQuantity, STOCK_LIMITS } from "@/lib/inventory/constants"
+import {
+  docDateLimitHint,
+  formatStockQuantity,
+  isScheduledDate,
+  maxDocDate,
+  STOCK_LIMITS,
+} from "@/lib/inventory/constants"
 import type {
+  StockAvailabilityOn,
   StockPartnerOption,
   StockProductOption,
 } from "@/lib/inventory/queries"
 import {
   emptyIssueLineInput,
-  issueFormSchema,
+  isCalendarDate,
+  makeIssueFormSchema,
   todayInKorea,
   type IssueFormInput,
   type IssueFormValues,
@@ -124,16 +134,21 @@ function planSnapshot(values: IssueFormInput): string {
  * 출고 등록 modal (?modal=new on /inventory/issues): a manual 출고 that
  * uses the same FEFO allocation as the future 주문 module.
  *
- * - 머리: 출고일 (default today, earlier allowed), 거래처 (any 사용
- *   거래처, optional; a 매입처 for 반품), 메모.
+ * - 머리: 출고일 (default today, earlier allowed, and later up to today +
+ *   the 재고 설정's days: a 예정 출고, e.g. 새벽배송 — an order of the 23rd
+ *   entered on the 23rd dated the 24th), 거래처 (any 사용 거래처, optional;
+ *   a 매입처 for 반품), 메모.
  * - 줄: [상품 추가] (기준상품 and 묶음상품 — a 묶음상품 goes out as its
  *   구성상품), 수량, 출고 위치 (optional: only stock in that 창고 / 구역 /
- *   위치), 메모. The 현재 출고 가능 column is the stock now minus 기한 경과.
- * - [배정 미리보기 | F7] shows which lots and 위치 FEFO takes (기한 빠른
- *   로트부터, 기한 경과 제외) and where stock is short. [저장 | F8] makes
- *   the preview again and asks to confirm it; the database chooses the
- *   lots once more at the moment of saving (stock may have changed) and
- *   refuses the whole 전표 when any line lacks stock. The form is locked
+ *   위치), 메모. The 출고 가능 column is what can go out ON the 출고일
+ *   (loadIssueAvailability, read again when the 출고일 changes): without
+ *   stock past its 기한 that day, stock that comes later, and stock that
+ *   전표 dated after it already use.
+ * - [배정 미리보기 | F7] shows which lots and 위치 FEFO takes on the 출고일
+ *   (기한 빠른 로트부터, 그날 기한 경과 제외) and where stock is short.
+ *   [저장 | F8] makes the preview again and asks to confirm it; the
+ *   database chooses the lots once more at the moment of saving (stock may
+ *   have changed) and refuses the whole 전표 when any line lacks stock. The form is locked
  *   while that plan is made, and [출고 확정] sends exactly the values the
  *   confirmed plan was made for (changed meanwhile → nothing is sent; press
  *   저장 again).
@@ -142,9 +157,11 @@ export function IssueDialog({
   onClose,
   onSaved,
   expiryWarningDays,
+  futureDocDays,
 }: StockNewDialogProps) {
   const [requestId] = useState(() => newRequestId())
   const today = todayInKorea()
+  const [schema] = useState(() => makeIssueFormSchema(futureDocDays))
   const places = useStockPlaces()
   const isStillShown = useNewModalStillShown()
 
@@ -165,7 +182,7 @@ export function IssueDialog({
   const submittingRef = useRef(false)
 
   const form = useForm<IssueFormInput, unknown, IssueFormValues>({
-    resolver: zodResolver(issueFormSchema),
+    resolver: zodResolver(schema),
     defaultValues: {
       requestId,
       docDate: today,
@@ -192,6 +209,45 @@ export function IssueDialog({
     lines,
   })
   const planIsCurrent = plan !== null && plan.snapshot === currentSnapshot
+
+  // ---- 출고 가능 on the 출고일 (read again when the date or the products change)
+
+  const availabilityDate = isCalendarDate(docDate) ? docDate : today
+  const baseProductIds = [
+    ...new Set(
+      lines
+        .map((line) => line.productId)
+        .filter((id) => products.get(id)?.productType === "base")
+    ),
+  ].sort()
+  const availabilityKey = `${availabilityDate}|${baseProductIds.join(",")}`
+  const [availability, setAvailability] = useState<{
+    key: string
+    /** Null: the database cannot tell (then the picker's numbers are shown). */
+    values: Record<string, StockAvailabilityOn> | null
+  } | null>(null)
+  const [, startAvailability] = useTransition()
+  useEffect(() => {
+    const [date, ids] = availabilityKey.split("|")
+    if (!ids) return
+    let ignore = false
+    startAvailability(async () => {
+      try {
+        const values = await loadIssueAvailability(ids.split(","), date)
+        if (!ignore) setAvailability({ key: availabilityKey, values })
+      } catch (error) {
+        unstable_rethrow(error)
+        console.error(error)
+        // Not readable now: show the picker's numbers instead of "…".
+        if (!ignore) setAvailability({ key: availabilityKey, values: null })
+      }
+    })
+    return () => {
+      ignore = true
+    }
+  }, [availabilityKey])
+  const availabilityShown =
+    availability?.key === availabilityKey ? availability.values : undefined
 
   useEffect(() => {
     if (!isDirty) return
@@ -488,12 +544,12 @@ export function IssueDialog({
                   required
                   error={errors.docDate?.message}
                   errorId={fieldErrorId(FORM_ID, "docDate")}
-                  hint="오늘 이후는 안 됩니다"
+                  hint={docDateLimitHint(futureDocDays, today)}
                 >
                   <Input
                     id={fieldDomId(FORM_ID, "docDate")}
                     type="date"
-                    max={today}
+                    max={maxDocDate(futureDocDays, today)}
                     aria-required
                     aria-invalid={!!errors.docDate}
                     aria-describedby={
@@ -503,6 +559,11 @@ export function IssueDialog({
                     }
                     className="h-8 w-40 rounded-sm"
                     {...register("docDate")}
+                  />
+                  <ScheduledBadge
+                    date={docDate}
+                    today={today}
+                    title="오늘 이후 날짜: 예정 출고(예: 새벽배송)로 저장됩니다. 그 날짜 기준으로 기한·재고를 보고 배정합니다."
                   />
                 </FormRow>
                 <FormRow
@@ -571,7 +632,11 @@ export function IssueDialog({
                   <DataGridHead className="w-10">줄</DataGridHead>
                   <DataGridHead className="min-w-64">상품</DataGridHead>
                   <DataGridHead className="w-14">단위</DataGridHead>
-                  <DataGridHead className="w-28">현재 출고 가능</DataGridHead>
+                  <DataGridHead className="w-28">
+                    {availabilityDate === today
+                      ? "출고 가능(오늘)"
+                      : `출고 가능(${availabilityDate.slice(5)})`}
+                  </DataGridHead>
                   <DataGridHead className="w-32">수량</DataGridHead>
                   <DataGridHead className="w-72">출고 위치 (선택)</DataGridHead>
                   <DataGridHead className="min-w-40">메모</DataGridHead>
@@ -606,7 +671,17 @@ export function IssueDialog({
                     const lineLabel = `${index + 1}번째 줄`
                     const placeId =
                       line.locationId || line.zoneId || line.warehouseId || null
-                    const available = product?.availableQuantity ?? null
+                    // 출고 가능 on the 출고일: the database's number once it
+                    // is read for this date; the picker's (today, minus
+                    // 기한 경과) when the database cannot tell.
+                    const available =
+                      product?.productType !== "base"
+                        ? null
+                        : availabilityShown
+                          ? (availabilityShown[product.id]?.available ?? 0)
+                          : availabilityShown === null
+                            ? product.availableQuantity
+                            : undefined
                     return (
                       <DataGridRow key={field.id}>
                         <DataGridCell numeric>{index + 1}</DataGridCell>
@@ -655,12 +730,16 @@ export function IssueDialog({
                           title={
                             product?.productType === "bundle"
                               ? "묶음상품은 [배정 미리보기]에서 구성상품별로 확인합니다."
-                              : "지금 재고에서 기한이 지난 재고를 뺀 수량입니다."
+                              : `출고일(${availabilityDate})에 나갈 수 있는 수량입니다. 그날 기한이 지난 재고, 그 뒤에 들어오는 재고, 뒤 날짜 전표(예정 출고 등)가 쓰는 재고는 빠집니다.`
                           }
                         >
-                          {available === null
-                            ? EMPTY_VALUE
-                            : formatStockQuantity(available, "")}
+                          {available === undefined ? (
+                            <span className="text-muted-foreground">…</span>
+                          ) : available === null ? (
+                            EMPTY_VALUE
+                          ) : (
+                            formatStockQuantity(available, "")
+                          )}
                         </DataGridCell>
                         <DataGridCell className="px-1 py-0.5">
                           <Controller
@@ -773,6 +852,12 @@ export function IssueDialog({
           >
             <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
               <h3 className="text-[15px] font-bold">배정 미리보기 (FEFO)</h3>
+              {plan && (
+                <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                  출고일 {plan.plan.docDate} 기준
+                  <ScheduledBadge date={plan.plan.docDate} today={today} />
+                </span>
+              )}
               {plan && !planIsCurrent && (
                 <span className="text-xs font-bold text-destructive">
                   내용이 바뀌었습니다. [배정 미리보기 | F7]를 다시 눌러 주세요.
@@ -801,8 +886,9 @@ export function IssueDialog({
             ) : (
               <p className="border border-dashed border-input px-3 py-4 text-center text-[13px] text-muted-foreground">
                 상품과 수량을 넣고 [배정 미리보기 | F7]를 누르면 어느
-                로트·위치에서 나갈지 보여 줍니다. 기한이 지난 재고는 나가지
-                않습니다.
+                로트·위치에서 나갈지 보여 줍니다. 출고일 기준으로 기한이 지난
+                재고는 나가지 않고, 그 뒤에 들어오는 재고나 뒤 날짜 전표(예정
+                출고)가 쓰는 재고도 쓰지 않습니다.
               </p>
             )}
           </section>
@@ -903,16 +989,27 @@ function IssueConfirmDialog({
     >
       <div className="flex flex-col gap-2 text-sm">
         {plan.ok ? (
-          <p>
-            아래 로트에서 출고합니다 (
-            <strong className="font-bold">
-              {formatNumber(plan.lines.length, 0)}줄 · 로트×위치{" "}
-              {formatNumber(lotCount, 0)}건
-            </strong>
-            , 출고일 {plan.docDate}). 저장하는 순간 재고를 한 번 더 확인하므로,
-            그 사이 다른 직원이 꺼낸 재고가 있으면 배정이 조금 달라질 수
-            있습니다.
-          </p>
+          <>
+            <p>
+              아래 로트에서 출고합니다 (
+              <strong className="font-bold">
+                {formatNumber(plan.lines.length, 0)}줄 · 로트×위치{" "}
+                {formatNumber(lotCount, 0)}건
+              </strong>
+              , 출고일 {plan.docDate}). 저장하는 순간 재고를 한 번 더
+              확인하므로, 그 사이 다른 직원이 꺼낸 재고가 있으면 배정이 조금
+              달라질 수 있습니다.
+            </p>
+            {isScheduledDate(plan.docDate, todayInKorea()) && (
+              <p className="flex items-center gap-1.5 border border-dashed border-brand bg-brand-tint px-3 py-2 text-[13px] text-brand-active">
+                <ScheduledBadge date={plan.docDate} today={todayInKorea()} />
+                출고일이 오늘 이후라 ‘예정 출고’로 저장됩니다. 재고처별
+                재고현황의 수량에서는 바로 빠지고, 오늘 날짜의 다른 전표는 이
+                재고를 쓰지 않습니다. 주문이 취소되면 이 전표를 [전표 취소]하면
+                재고가 바로 다시 풀립니다.
+              </p>
+            )}
+          </>
         ) : (
           <div
             role="alert"
@@ -925,7 +1022,7 @@ function IssueConfirmDialog({
               {shortages.map(({ line, demand }) => (
                 <li key={`${line}-${demand.productId}`}>
                   {line}번째 줄 {demand.code} {demand.name}:{" "}
-                  {shortageText(demand)}
+                  {shortageText(demand, plan.docDate)}
                 </li>
               ))}
             </ul>

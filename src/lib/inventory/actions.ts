@@ -14,6 +14,7 @@ import {
 import {
   getCountSheet,
   getInventorySettings,
+  getStockAvailabilityOn,
   getStockDocument,
   getStockPlaceTree,
   getLotStockRows,
@@ -27,6 +28,7 @@ import {
   type InventoryList,
   type InventorySettings,
   type LotStockRow,
+  type StockAvailabilityOn,
   type StockDocumentDetail,
   type StockPartnerOption,
   type StockProductOption,
@@ -584,6 +586,9 @@ const planSchema = z.object({
           available: z.number(),
           expired_excluded: z.number(),
           taken_by_other_lines: z.number().optional(),
+          // Missing on a database without *_inventory_future_dates.
+          reserved_later: z.number().optional(),
+          arriving_later: z.number().optional(),
           allocations: z.array(allocationSchema),
         })
       ),
@@ -638,6 +643,13 @@ export type IssueDemand = {
   expiredExcluded: number
   /** Stock at this line's places that lines planned before it took. */
   takenByOtherLines: number
+  /**
+   * Stock there at the end of the 출고일 that 전표 dated after it use (e.g.
+   * a 예정 출고 of tomorrow): left out, so they keep their stock.
+   */
+  reservedLater: number
+  /** Stock that comes only after the 출고일 (a later 입고, 이동, 조정). */
+  arrivingLater: number
   allocations: IssueAllocation[]
 }
 
@@ -689,6 +701,8 @@ function toIssuePlan(data: Json | null): IssuePlan {
         available: demand.available,
         expiredExcluded: demand.expired_excluded,
         takenByOtherLines: demand.taken_by_other_lines ?? 0,
+        reservedLater: demand.reserved_later ?? 0,
+        arrivingLater: demand.arriving_later ?? 0,
         allocations: demand.allocations.map((allocation) => ({
           lotId: allocation.lot_id,
           lotNo: allocation.lot_no,
@@ -747,6 +761,31 @@ export async function previewIssue(
   })
   if (error) return stockSaveFailed(error)
   return { ok: true, plan: toIssuePlan(data) }
+}
+
+/**
+ * 출고 가능 of these 기준상품 on the 출고일 (`docDate` "" = today): the 출고
+ * form's "출고 가능" column, read again whenever the 출고일 changes. Null
+ * when the database cannot tell (then the form shows the stock now minus
+ * 기한 경과, from the picker).
+ */
+export async function loadIssueAvailability(
+  productIds: unknown,
+  docDate: unknown
+): Promise<Record<string, StockAvailabilityOn> | null> {
+  await requireUser()
+  const ids = z.array(z.string()).max(500).safeParse(productIds)
+  if (!ids.success) return {}
+  const date =
+    typeof docDate === "string" && isCalendarDate(docDate) ? docDate : null
+  return getStockAvailabilityOn(
+    [
+      ...new Set(
+        ids.data.filter((id) => isUuid(id)).map((id) => id.toLowerCase())
+      ),
+    ],
+    date
+  )
 }
 
 /**
@@ -1029,7 +1068,7 @@ export async function loadStockPlaces(): Promise<StockWarehouseNode[]> {
   return getStockPlaceTree()
 }
 
-/** The 재고 설정 (기한 임박 기준일). */
+/** The 재고 설정 (기한 임박 기준일, 전표 일자 허용 범위). */
 export async function loadInventorySettings(): Promise<InventorySettings> {
   await requireUser()
   return getInventorySettings()
@@ -1669,7 +1708,10 @@ export async function reorderStockPlaces(
   return { ok: true }
 }
 
-/** 재고 설정 저장 (input: InventorySettingsInput, 기한 임박 기준일 0–365). */
+/**
+ * 재고 설정 저장 (input: InventorySettingsInput — only the fields sent:
+ * 기한 임박 기준일 0–365, 전표 일자 허용 범위 0–30).
+ */
 export async function updateInventorySettings(
   input: unknown
 ): Promise<
@@ -1679,16 +1721,25 @@ export async function updateInventorySettings(
   await requireUser()
   const parsed = inventorySettingsSchema.safeParse(input)
   if (!parsed.success) {
-    const message = parsed.error.issues[0]?.message ?? CHECK_INPUT_MESSAGE
-    return { ok: false, message, fieldErrors: { expiryWarningDays: message } }
+    const issue = parsed.error.issues[0]
+    const message = issue?.message ?? CHECK_INPUT_MESSAGE
+    const field = issue?.path.map(String).join(".") || "expiryWarningDays"
+    return { ok: false, message, fieldErrors: { [field]: message } }
   }
   const supabase = await createClient()
   const { error } = await supabase
     .from("app_settings")
-    .update({ expiry_warning_days: parsed.data.expiryWarningDays })
+    .update({
+      ...(parsed.data.expiryWarningDays === undefined
+        ? {}
+        : { expiry_warning_days: parsed.data.expiryWarningDays }),
+      ...(parsed.data.futureDocDays === undefined
+        ? {}
+        : { future_doc_days: parsed.data.futureDocDays }),
+    })
     .eq("id", 1)
   if (error) {
-    if (isInventoryNotReady(error)) {
+    if (isInventoryNotReady(error) || error.code === "PGRST204") {
       return {
         ok: false,
         message: INVENTORY_NOT_READY_MESSAGE,

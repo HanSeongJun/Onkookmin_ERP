@@ -61,6 +61,7 @@ import type { StockNewDialogProps } from "@/components/inventory/stock-document-
 import { StockPlaceField } from "@/components/inventory/stock-place-field"
 import { storageMismatchText } from "@/components/inventory/storage-fit"
 import { useFocusAfterAppend } from "@/components/inventory/use-focus-after-append"
+import { ScheduledBadge } from "@/components/inventory/scheduled-badge"
 import { useInitialLotRows } from "@/components/inventory/use-initial-lot-rows"
 import { useNewModalStillShown } from "@/components/inventory/use-new-modal-still-shown"
 import { useStockPlaces } from "@/components/inventory/use-stock-places"
@@ -72,11 +73,16 @@ import {
   type StockSaveResult,
   type StockWarning,
 } from "@/lib/inventory/actions"
-import { formatStockQuantity, STOCK_LIMITS } from "@/lib/inventory/constants"
+import {
+  docDateLimitHint,
+  formatStockQuantity,
+  maxDocDate,
+  STOCK_LIMITS,
+} from "@/lib/inventory/constants"
 import type { LotStockRow } from "@/lib/inventory/queries"
 import {
+  makeTransferFormSchema,
   todayInKorea,
-  transferFormSchema,
   type TransferFormInput,
   type TransferFormValues,
   type TransferLineInput,
@@ -121,7 +127,9 @@ type TransferCheck = { warnings: StockWarning[]; input: TransferFormInput }
  * 재고처간 이동등록 modal (?modal=new on /inventory/transfers; ?balances=…
  * adds the rows checked on 재고처별 재고현황).
  *
- * - 머리: 이동일 (default today, earlier allowed), 받는 위치 (for new lines;
+ * - 머리: 이동일 (default today, earlier allowed, later up to today + the
+ *   재고 설정's days = 예정; the source gives what it has that day, the
+ *   destination has it from that day), 받는 위치 (for new lines;
  *   [모든 줄에 적용]), 보내는 위치 (optional: the lot picker starts there),
  *   메모.
  * - 줄: [재고 추가] opens the lot picker. Each line: 보내는 위치 → 받는 위치
@@ -137,9 +145,11 @@ export function TransferDialog({
   onClose,
   onSaved,
   initialBalanceIds,
+  futureDocDays,
 }: StockNewDialogProps) {
   const [requestId] = useState(() => newRequestId())
   const today = todayInKorea()
+  const [schema] = useState(() => makeTransferFormSchema(futureDocDays))
   const places = useStockPlaces()
   const isStillShown = useNewModalStillShown()
 
@@ -155,7 +165,7 @@ export function TransferDialog({
   const submittingRef = useRef(false)
 
   const form = useForm<TransferFormInput, unknown, TransferFormValues>({
-    resolver: zodResolver(transferFormSchema),
+    resolver: zodResolver(schema),
     defaultValues: { requestId, docDate: today, memo: "", lines: [] },
     shouldFocusError: false,
   })
@@ -166,6 +176,7 @@ export function TransferDialog({
   } = form
   const { fields, append, remove } = useFieldArray({ control, name: "lines" })
   const lines = useWatch({ control, name: "lines" })
+  const docDate = useWatch({ control, name: "docDate" })
   const focusLine = useFocusAfterAppend(FORM_ID, fields.length)
 
   useEffect(() => {
@@ -467,16 +478,21 @@ export function TransferDialog({
                   required
                   error={errors.docDate?.message}
                   errorId={fieldErrorId(FORM_ID, "docDate")}
-                  hint="오늘 이후는 안 됩니다"
+                  hint={docDateLimitHint(futureDocDays, today)}
                 >
                   <Input
                     id={fieldDomId(FORM_ID, "docDate")}
                     type="date"
-                    max={today}
+                    max={maxDocDate(futureDocDays, today)}
                     aria-required
                     aria-invalid={!!errors.docDate}
                     className="h-8 w-40 rounded-sm"
                     {...register("docDate")}
+                  />
+                  <ScheduledBadge
+                    date={docDate}
+                    today={today}
+                    title="오늘 이후 날짜: 예정 이동으로 저장됩니다. 그 날짜에 보내는 위치에 남아 있는 재고만 옮길 수 있습니다."
                   />
                 </FormRow>
                 <FormRow

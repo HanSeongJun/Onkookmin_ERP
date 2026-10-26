@@ -18,6 +18,7 @@ import {
   INVENTORY_EXPORT_MAX_ROWS,
   INVENTORY_PAGE_SIZES,
   sortState,
+  todayInKorea,
   type InventoryPageSize,
   type LotStockColumnId,
   type LotStockParams,
@@ -128,19 +129,29 @@ export type InventoryList<Row> = {
 export type InventorySettings = {
   /** 기한 임박 기준일: at most this many days left = 기한 임박. */
   expiryWarningDays: number
+  /**
+   * 전표 일자 허용 범위: a 전표 may be dated up to today + this many days
+   * (예정 전표, e.g. tomorrow's 새벽배송 출고). 0 = today at most.
+   */
+  futureDocDays: number
   updatedAt: string
 }
 
 export async function getInventorySettings(): Promise<InventorySettings> {
   const supabase = await createClient()
+  // "*": a database without migration *_inventory_future_dates (no
+  // future_doc_days column yet) still answers; it then allows today only,
+  // as its functions do.
   const { data, error } = await supabase
     .from("app_settings")
-    .select("expiry_warning_days, updated_at")
+    .select("*")
     .eq("id", 1)
     .single()
   if (error) throw readFailed("재고 설정을 불러오지 못했습니다", error)
   return {
     expiryWarningDays: data.expiry_warning_days,
+    futureDocDays:
+      typeof data.future_doc_days === "number" ? data.future_doc_days : 0,
     updatedAt: data.updated_at,
   }
 }
@@ -1063,6 +1074,8 @@ const ledgerSchema = z.object({
       bundle_code: z.string().nullable(),
       bundle_name: z.string().nullable(),
       created_at: z.string(),
+      // Missing on a database without migration *_inventory_future_dates.
+      same_day_cancelled: z.boolean().optional(),
     })
   ),
 })
@@ -1095,8 +1108,17 @@ export type StockLedgerLine = {
   warehouseName: string
   inQty: number
   outQty: number
-  /** 잔량 after this line (from the 이월). */
+  /**
+   * 잔량 after this line (from the 이월). A line of a 전표 undone on its own
+   * date, and its 취소 line, leave it unchanged (`sameDayCancelled`).
+   */
   balance: number
+  /**
+   * A line of a 전표 undone on its own date (e.g. tomorrow's 새벽배송 출고
+   * cancelled by the customer), or that 취소's line: it never moved the
+   * stock of any day, so the 잔량 stays as it was.
+   */
+  sameDayCancelled: boolean
   unitCostInclVat: number | null
   reason: DisposalReason | null
   /** The line's memo, else the 전표's. */
@@ -1104,6 +1126,14 @@ export type StockLedgerLine = {
   bundleCode: string | null
   bundleName: string | null
   createdAt: string
+}
+
+/** Lines of a product dated after the period and after today (예정). */
+export type StockLedgerLaterLines = {
+  /** How many (in every 창고). */
+  count: number
+  /** The latest of their dates ("YYYY-MM-DD"). */
+  lastDate: string
 }
 
 export type StockLedger = {
@@ -1142,6 +1172,36 @@ export type StockLedger = {
     transferNetQty: number
   }
   lines: StockLedgerLine[]
+  /**
+   * 예정 lines (dated after today) that the period leaves out, or null:
+   * the screen offers to extend the period to them.
+   */
+  laterLines: StockLedgerLaterLines | null
+}
+
+/**
+ * The lines of a product dated after both `dateTo` and today (예정 전표
+ * the period does not show), or null when there are none.
+ */
+async function readLaterLedgerLines(
+  productId: string,
+  dateTo: string
+): Promise<StockLedgerLaterLines | null> {
+  const today = todayInKorea()
+  const supabase = await createClient()
+  const { data, count, error } = await supabase
+    .from("stock_movements")
+    .select("doc_date", { count: "exact" })
+    .eq("product_id", productId)
+    .gt("doc_date", dateTo > today ? dateTo : today)
+    .order("doc_date", { ascending: false })
+    .limit(1)
+  if (error) {
+    console.error("Could not count the later ledger lines:", error)
+    return null
+  }
+  const lastDate = data?.[0]?.doc_date
+  return count && lastDate ? { count, lastDate } : null
 }
 
 /** 상품별 거래수불 of one 기준상품, or null when no product is chosen. */
@@ -1168,6 +1228,7 @@ export async function getProductStockLedger(
     throw readFailed("거래수불을 불러오지 못했습니다", error)
   }
   const ledger = ledgerSchema.parse(data)
+  const laterLines = await readLaterLedgerLines(params.productId, params.to)
   return {
     product: {
       id: ledger.product.id,
@@ -1225,6 +1286,7 @@ export async function getProductStockLedger(
       inQty: line.in_qty,
       outQty: line.out_qty,
       balance: line.balance,
+      sameDayCancelled: line.same_day_cancelled ?? false,
       unitCostInclVat: line.unit_cost_incl_vat,
       reason: line.reason,
       memo: line.memo,
@@ -1232,6 +1294,7 @@ export async function getProductStockLedger(
       bundleName: line.bundle_name,
       createdAt: line.created_at,
     })),
+    laterLines,
   }
 }
 
@@ -1623,6 +1686,16 @@ const dashboardCardSchema = z.object({
 const dashboardSchema = z.object({
   today: z.string(),
   expiry_warning_days: z.number(),
+  // Missing on a database without migration *_inventory_future_dates.
+  future_doc_days: z.number().optional(),
+  scheduled: z
+    .object({
+      document_count: z.number(),
+      issue_count: z.number(),
+      first_date: z.string().nullable(),
+      last_date: z.string().nullable(),
+    })
+    .optional(),
   expired: dashboardCardSchema,
   imminent: dashboardCardSchema,
   mismatch: dashboardCardSchema,
@@ -1658,6 +1731,18 @@ export type StockDashboardCard = {
 export type StockDashboard = {
   today: string
   expiryWarningDays: number
+  /** 전표 일자 허용 범위 (재고 설정): today + this many days. */
+  futureDocDays: number
+  /**
+   * 예정 전표: dated after today, not undone (e.g. tomorrow's 새벽배송
+   * 출고). Their stock is already counted in the cards.
+   */
+  scheduled: {
+    documentCount: number
+    issueCount: number
+    firstDate: string | null
+    lastDate: string | null
+  }
   /** 기한 경과 재고 → /inventory/locations?expiry=expired */
   expired: StockDashboardCard
   /** 기한 임박 재고 (≤ N days) → /inventory/locations?expiry=imminent */
@@ -1705,6 +1790,13 @@ export async function getStockDashboard(
   return {
     today: dashboard.today,
     expiryWarningDays: dashboard.expiry_warning_days,
+    futureDocDays: dashboard.future_doc_days ?? 0,
+    scheduled: {
+      documentCount: dashboard.scheduled?.document_count ?? 0,
+      issueCount: dashboard.scheduled?.issue_count ?? 0,
+      firstDate: dashboard.scheduled?.first_date ?? null,
+      lastDate: dashboard.scheduled?.last_date ?? null,
+    },
     expired: card(dashboard.expired),
     imminent: card(dashboard.imminent),
     mismatch: {
@@ -1733,6 +1825,56 @@ export async function getStockDashboard(
       createdAt: document.created_at,
     })),
   }
+}
+
+// ---------------------------------------------------------------------------
+// 출고 가능 on a date (출고 등록)
+// ---------------------------------------------------------------------------
+
+/** What a 기준상품 can give on a date. */
+export type StockAvailabilityOn = {
+  /** Can go out on that date (기한 경과, 그 뒤 입고, 뒤 날짜 전표가 쓰는 재고 제외). */
+  available: number
+  /** Past its 기한 on that date (left out). */
+  expired: number
+}
+
+/**
+ * 출고 가능 of these 기준상품 on `date` (database stock_available_on: per
+ * (lot, 위치) what a new line dated `date` may take, without lots past
+ * their 기한 that day or received later). Products without stock get 0;
+ * 묶음상품 are left out. Null when the database does not have the function
+ * yet (migration *_inventory_future_dates not applied).
+ */
+export async function getStockAvailabilityOn(
+  productIds: readonly string[],
+  date: string | null
+): Promise<Record<string, StockAvailabilityOn> | null> {
+  if (productIds.length === 0) return {}
+  const supabase = await createClient()
+  const { data, error } = await supabase.rpc("stock_available_on", {
+    target_product_ids: [...productIds].slice(0, 500),
+    at_date: date ?? undefined,
+  })
+  if (error) {
+    if (isInventoryNotReady(error)) return null
+    throw readFailed("출고 가능 수량을 불러오지 못했습니다", error)
+  }
+  const rows = z
+    .array(
+      z.object({
+        product_id: z.string(),
+        available: z.number(),
+        expired: z.number(),
+      })
+    )
+    .parse(data)
+  const result: Record<string, StockAvailabilityOn> = {}
+  for (const id of productIds) result[id] = { available: 0, expired: 0 }
+  for (const row of rows) {
+    result[row.product_id] = { available: row.available, expired: row.expired }
+  }
+  return result
 }
 
 // ---------------------------------------------------------------------------

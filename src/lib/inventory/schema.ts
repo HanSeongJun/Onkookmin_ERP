@@ -31,10 +31,14 @@ import {
   DISPOSAL_REASONS,
   EXPIRY_KINDS,
   EXPIRY_WARNING_DAYS_MAX,
+  FUTURE_DOC_DAYS_MAX,
   STOCK_LIMITS,
   STOCK_PLACE_CODE_PATTERN,
   STOCK_PLACE_LIMITS,
+  docDateLimitMessage,
+  maxDocDate,
   parseStockQuantity,
+  shiftDate,
   type DisposalReason,
   type ExpiryKind,
   type ExpiryStatus,
@@ -113,11 +117,24 @@ function optionalDate(label: string) {
     .transform((value) => (value === "" ? null : value))
 }
 
-/** The 전표 일자: "" → null (= today, set by the database); never in the future. */
-const docDateField = optionalDate("전표 일자").refine(
-  (value) => value === null || value <= todayInKorea(),
-  { error: "전표 일자는 오늘 이후로 정할 수 없습니다." }
-)
+/**
+ * The 전표 일자: "" → null (= today, set by the database); at most today +
+ * `futureDays` (the 재고 설정 "오늘 이후 N일까지"; 예정 전표 such as
+ * tomorrow's 새벽배송 출고). The screens pass the setting; the Server
+ * Actions use FUTURE_DOC_DAYS_MAX and the database checks the setting.
+ */
+function docDateField(futureDays: number) {
+  return optionalDate("전표 일자").superRefine((value, ctx) => {
+    if (value === null) return
+    const today = todayInKorea()
+    if (value > maxDocDate(futureDays, today)) {
+      ctx.addIssue({
+        code: "custom",
+        message: docDateLimitMessage(futureDays, today),
+      })
+    }
+  })
+}
 
 /** The save request id (a UUID made when the modal opens), or null. */
 const requestIdField = text("저장 요청 번호가 올바르지 않습니다.")
@@ -270,25 +287,43 @@ export const locationFormSchema = z.object({
 export type LocationFormInput = z.input<typeof locationFormSchema>
 export type LocationFormValues = z.output<typeof locationFormSchema>
 
-/** 재고 설정: 기한 임박 기준일 (0–365일). */
-export const inventorySettingsSchema = z.object({
-  expiryWarningDays: text("기한 임박 기준일을 입력해 주세요.").transform(
-    (value, ctx) => {
-      const digits = value.replace(/일$/, "").trim()
-      if (
-        !/^\d{1,3}$/.test(digits) ||
-        Number(digits) > EXPIRY_WARNING_DAYS_MAX
-      ) {
-        ctx.addIssue({
-          code: "custom",
-          message: `기한 임박 기준일은 0~${EXPIRY_WARNING_DAYS_MAX}일로 입력해 주세요.`,
-        })
-        return z.NEVER
-      }
-      return Number(digits)
+/** A whole number of days 0–max typed as "7" or "7일". */
+function daysField(label: string, max: number) {
+  return text(`${label}을(를) 입력해 주세요.`).transform((value, ctx) => {
+    const digits = value.replace(/일$/, "").trim()
+    if (!/^\d{1,3}$/.test(digits) || Number(digits) > max) {
+      ctx.addIssue({
+        code: "custom",
+        message: `${label}은(는) 0~${max}일로 입력해 주세요.`,
+      })
+      return z.NEVER
     }
-  ),
-})
+    return Number(digits)
+  })
+}
+
+/**
+ * 재고 설정 (each field optional: only the ones sent are saved):
+ * - expiryWarningDays: 기한 임박 기준일 (0–365일);
+ * - futureDocDays: 전표 일자를 오늘 이후 며칠까지 (0–30일).
+ */
+export const inventorySettingsSchema = z
+  .object({
+    expiryWarningDays: daysField(
+      "기한 임박 기준일",
+      EXPIRY_WARNING_DAYS_MAX
+    ).optional(),
+    futureDocDays: daysField(
+      "전표 일자 허용 일수",
+      FUTURE_DOC_DAYS_MAX
+    ).optional(),
+  })
+  .refine(
+    (values) =>
+      values.expiryWarningDays !== undefined ||
+      values.futureDocDays !== undefined,
+    { error: "저장할 설정이 없습니다." }
+  )
 
 export type InventorySettingsInput = z.input<typeof inventorySettingsSchema>
 
@@ -353,27 +388,34 @@ function linesField<T extends z.ZodType>(line: T, label: string, min = 1) {
     })
 }
 
-export const receiptFormSchema = z
-  .object({
-    requestId: requestIdField,
-    docDate: docDateField,
-    /** 매입처 (매입처 or 매출·매입 거래처), optional. */
-    partnerId: optionalId("매입처를 다시 선택해 주세요."),
-    memo: optionalText(STOCK_LIMITS.memoMaxLength, "메모"),
-    lines: linesField(receiptLineSchema, "입고할 상품"),
-  })
-  .superRefine((values, ctx) => {
-    const date = values.docDate ?? todayInKorea()
-    values.lines.forEach((line, index) => {
-      if (line.manufacturedDate && line.manufacturedDate > date) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["lines", index, "manufacturedDate"],
-          message: `제조일자는 입고일(${date})보다 늦을 수 없습니다.`,
-        })
-      }
+/** 입고 등록 (`futureDays`: the 재고 설정, see docDateField). */
+export function makeReceiptFormSchema(
+  futureDays: number = FUTURE_DOC_DAYS_MAX
+) {
+  return z
+    .object({
+      requestId: requestIdField,
+      docDate: docDateField(futureDays),
+      /** 매입처 (매입처 or 매출·매입 거래처), optional. */
+      partnerId: optionalId("매입처를 다시 선택해 주세요."),
+      memo: optionalText(STOCK_LIMITS.memoMaxLength, "메모"),
+      lines: linesField(receiptLineSchema, "입고할 상품"),
     })
-  })
+    .superRefine((values, ctx) => {
+      const date = values.docDate ?? todayInKorea()
+      values.lines.forEach((line, index) => {
+        if (line.manufacturedDate && line.manufacturedDate > date) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["lines", index, "manufacturedDate"],
+            message: `제조일자는 입고일(${date})보다 늦을 수 없습니다.`,
+          })
+        }
+      })
+    })
+}
+
+export const receiptFormSchema = makeReceiptFormSchema()
 
 export type ReceiptFormInput = z.input<typeof receiptFormSchema>
 export type ReceiptFormValues = z.output<typeof receiptFormSchema>
@@ -419,14 +461,19 @@ const issueLineSchema = z
     checkLineUnit(ctx, line.quantity, line.unit, ["quantity"], "수량")
   })
 
-export const issueFormSchema = z.object({
-  requestId: requestIdField,
-  docDate: docDateField,
-  /** 거래처 (any 사용 거래처: 매출처, or a 매입처 for 반품), optional. */
-  partnerId: optionalId("거래처를 다시 선택해 주세요."),
-  memo: optionalText(STOCK_LIMITS.memoMaxLength, "메모"),
-  lines: linesField(issueLineSchema, "출고할 상품"),
-})
+/** 출고 등록 (`futureDays`: the 재고 설정, see docDateField). */
+export function makeIssueFormSchema(futureDays: number = FUTURE_DOC_DAYS_MAX) {
+  return z.object({
+    requestId: requestIdField,
+    docDate: docDateField(futureDays),
+    /** 거래처 (any 사용 거래처: 매출처, or a 매입처 for 반품), optional. */
+    partnerId: optionalId("거래처를 다시 선택해 주세요."),
+    memo: optionalText(STOCK_LIMITS.memoMaxLength, "메모"),
+    lines: linesField(issueLineSchema, "출고할 상품"),
+  })
+}
+
+export const issueFormSchema = makeIssueFormSchema()
 
 export type IssueFormInput = z.input<typeof issueFormSchema>
 export type IssueFormValues = z.output<typeof issueFormSchema>
@@ -471,12 +518,19 @@ const disposalLineSchema = z
     }
   })
 
-export const disposalFormSchema = z.object({
-  requestId: requestIdField,
-  docDate: docDateField,
-  memo: optionalText(STOCK_LIMITS.memoMaxLength, "메모"),
-  lines: linesField(disposalLineSchema, "폐기할 재고"),
-})
+/** 폐기 등록 (`futureDays`: the 재고 설정, see docDateField). */
+export function makeDisposalFormSchema(
+  futureDays: number = FUTURE_DOC_DAYS_MAX
+) {
+  return z.object({
+    requestId: requestIdField,
+    docDate: docDateField(futureDays),
+    memo: optionalText(STOCK_LIMITS.memoMaxLength, "메모"),
+    lines: linesField(disposalLineSchema, "폐기할 재고"),
+  })
+}
+
+export const disposalFormSchema = makeDisposalFormSchema()
 
 export type DisposalFormInput = z.input<typeof disposalFormSchema>
 export type DisposalFormValues = z.output<typeof disposalFormSchema>
@@ -507,12 +561,19 @@ const transferLineSchema = z
     }
   })
 
-export const transferFormSchema = z.object({
-  requestId: requestIdField,
-  docDate: docDateField,
-  memo: optionalText(STOCK_LIMITS.memoMaxLength, "메모"),
-  lines: linesField(transferLineSchema, "이동할 재고"),
-})
+/** 재고처간 이동 등록 (`futureDays`: the 재고 설정, see docDateField). */
+export function makeTransferFormSchema(
+  futureDays: number = FUTURE_DOC_DAYS_MAX
+) {
+  return z.object({
+    requestId: requestIdField,
+    docDate: docDateField(futureDays),
+    memo: optionalText(STOCK_LIMITS.memoMaxLength, "메모"),
+    lines: linesField(transferLineSchema, "이동할 재고"),
+  })
+}
+
+export const transferFormSchema = makeTransferFormSchema()
 
 export type TransferFormInput = z.input<typeof transferFormSchema>
 export type TransferFormValues = z.output<typeof transferFormSchema>
@@ -586,33 +647,41 @@ const countNewLotSchema = z
     }
   })
 
-export const countFormSchema = z
-  .object({
-    requestId: requestIdField,
-    /** The 실사 date (empty = today); the 실사 목록 was read for it. */
-    docDate: docDateField,
-    /** 사유. */
-    memo: optionalText(STOCK_LIMITS.memoMaxLength, "사유"),
-    lines: z.array(countLineSchema).max(STOCK_LIMITS.linesMax),
-    newLots: z.array(countNewLotSchema).max(STOCK_LIMITS.linesMax),
-  })
-  .superRefine((values, ctx) => {
-    const counted = values.lines.filter((line) => line.countedQuantity !== null)
-    if (counted.length + values.newLots.length === 0) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["lines"],
-        message: "실사 수량을 1줄 이상 입력하거나 발견한 재고를 추가해 주세요.",
-      })
-    }
-    if (counted.length + values.newLots.length > STOCK_LIMITS.linesMax) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["lines"],
-        message: `실사 전표 하나에 ${STOCK_LIMITS.linesMax.toLocaleString("ko-KR")}줄까지 넣을 수 있습니다.`,
-      })
-    }
-  })
+/** 실사재고조정 (`futureDays`: the 재고 설정, see docDateField). */
+export function makeCountFormSchema(futureDays: number = FUTURE_DOC_DAYS_MAX) {
+  return z
+    .object({
+      requestId: requestIdField,
+      /** The 실사 date (empty = today); the 실사 목록 was read for it. */
+      docDate: docDateField(futureDays),
+      /** 사유. */
+      memo: optionalText(STOCK_LIMITS.memoMaxLength, "사유"),
+      lines: z.array(countLineSchema).max(STOCK_LIMITS.linesMax),
+      newLots: z.array(countNewLotSchema).max(STOCK_LIMITS.linesMax),
+    })
+    .superRefine((values, ctx) => {
+      const counted = values.lines.filter(
+        (line) => line.countedQuantity !== null
+      )
+      if (counted.length + values.newLots.length === 0) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["lines"],
+          message:
+            "실사 수량을 1줄 이상 입력하거나 발견한 재고를 추가해 주세요.",
+        })
+      }
+      if (counted.length + values.newLots.length > STOCK_LIMITS.linesMax) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["lines"],
+          message: `실사 전표 하나에 ${STOCK_LIMITS.linesMax.toLocaleString("ko-KR")}줄까지 넣을 수 있습니다.`,
+        })
+      }
+    })
+}
+
+export const countFormSchema = makeCountFormSchema()
 
 export type CountFormInput = z.input<typeof countFormSchema>
 export type CountFormValues = z.output<typeof countFormSchema>
@@ -623,10 +692,15 @@ export type CountNewLotInput = CountFormInput["newLots"][number]
 // 취소
 // ---------------------------------------------------------------------------
 
+/**
+ * 취소. The 취소 date may also be the original 전표's own date when that is
+ * later than today + the setting (a 예정 전표 can always be undone); the
+ * dialog checks that, the database checks it again.
+ */
 export const reversalFormSchema = z.object({
   requestId: requestIdField,
-  /** Empty = today; not before the original 전표 date. */
-  docDate: docDateField,
+  /** Empty = today (or the original date of a 예정 전표); not before it. */
+  docDate: optionalDate("취소 일자"),
   /** Empty = "<전표번호> 취소". */
   memo: optionalText(STOCK_LIMITS.memoMaxLength, "메모"),
 })
@@ -1140,7 +1214,11 @@ export type StockDocumentStatusFilter =
   (typeof STOCK_DOCUMENT_STATUS_FILTERS)[number]["value"]
 
 export type StockDocumentListParams = {
-  /** 전표 일자 range (URL "from"/"to"; default: the last 30 days). */
+  /**
+   * 전표 일자 range (URL "from"/"to"; default: the last 30 days and every
+   * 예정 전표 — "to" is today + FUTURE_DOC_DAYS_MAX, the latest date the
+   * 재고 설정 can ever allow, so a 전표 saved for tomorrow is in the list).
+   */
   from: string
   to: string
   /** 전표번호·상품코드·상품명·로트번호 (URL "q"). */
@@ -1159,11 +1237,9 @@ export type StockDocumentListParams = {
 
 export function defaultStockDocumentListParams(): StockDocumentListParams {
   const today = todayInKorea()
-  const start = new Date(`${today}T00:00:00Z`)
-  start.setUTCDate(start.getUTCDate() - 30)
   return {
-    from: start.toISOString().slice(0, 10),
-    to: today,
+    from: shiftDate(today, -30),
+    to: shiftDate(today, FUTURE_DOC_DAYS_MAX),
     q: "",
     partnerId: null,
     productId: null,

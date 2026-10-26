@@ -26,6 +26,7 @@ import { ErpDialog } from "@/components/erp/erp-dialog"
 import { FormRow, FormSection, FormTable } from "@/components/erp/form-table"
 import { SearchField, SearchPanel } from "@/components/erp/search-panel"
 import { newRequestId } from "@/components/inventory/dialog-helpers"
+import { ScheduledBadge } from "@/components/inventory/scheduled-badge"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useHotkeys } from "@/hooks/use-hotkeys"
@@ -38,7 +39,10 @@ import {
   type StockSaveResult,
 } from "@/lib/inventory/actions"
 import {
+  docDateLimitHint,
+  docDateLimitMessage,
   formatPlacePath,
+  maxDocDate,
   STOCK_LIMITS,
   suggestExpiryDate,
 } from "@/lib/inventory/constants"
@@ -97,7 +101,13 @@ const ALL = "all"
 /** What is read when the modal opens. */
 type LoadState =
   | { status: "loading" }
-  | { status: "ready"; places: StockWarehouseNode[]; warningDays: number }
+  | {
+      status: "ready"
+      places: StockWarehouseNode[]
+      warningDays: number
+      /** 전표 일자 허용 범위 (재고 설정): today + this many days. */
+      futureDocDays: number
+    }
   | { status: "error" }
 
 /** A 실사 범위: one 창고, optionally one 구역 and one 위치 ("" = all). */
@@ -228,7 +238,8 @@ function listMessage(
 /**
  * 실사 등록 modal (?modal=new).
  *
- * 1. 실사 범위: 실사 일자 (today or earlier) and a 창고 (optionally one 구역
+ * 1. 실사 범위: 실사 일자 (today or earlier; later up to today + the 재고
+ *    설정's days, counting the 예정 전표 up to then) and a 창고 (optionally one 구역
  *    and one 선반/위치) → [실사 목록 불러오기 | F4] reads every lot with
  *    stock there at the end of that day (전산 수량).
  * 2. 실사 수량: the counted quantity per line; an empty box means "not
@@ -336,6 +347,7 @@ export function CountDialog({
     startLoad(async () => {
       let places: StockWarehouseNode[]
       let warningDays: number
+      let futureDocDays: number
       try {
         const [placeTree, settings] = await Promise.all([
           loadStockPlaces(),
@@ -343,6 +355,7 @@ export function CountDialog({
         ])
         places = placeTree
         warningDays = settings.expiryWarningDays
+        futureDocDays = settings.futureDocDays
       } catch (error) {
         if (ignore) return
         unstable_rethrow(error)
@@ -351,7 +364,7 @@ export function CountDialog({
         return
       }
       if (ignore) return
-      setLoad({ status: "ready", places, warningDays })
+      setLoad({ status: "ready", places, warningDays, futureDocDays })
       // With only one 사용 창고 there is nothing to choose.
       const active = places.filter((warehouse) => warehouse.isActive)
       if (active.length === 1) {
@@ -380,6 +393,7 @@ export function CountDialog({
 
   const places = load.status === "ready" ? load.places : []
   const warningDays = load.status === "ready" ? load.warningDays : 7
+  const futureDocDays = load.status === "ready" ? load.futureDocDays : 0
   const draftScope: Scope = {
     warehouseId: draft.warehouseId,
     zoneId: draft.zoneId,
@@ -419,9 +433,13 @@ export function CountDialog({
       setSheetError("실사할 창고를 골라 주세요.")
       return
     }
-    if (!isCalendarDate(draft.date) || draft.date > todayInKorea()) {
+    if (!isCalendarDate(draft.date)) {
+      setSheetError("실사 일자를 날짜(예: 2026-10-23)로 입력해 주세요.")
+      return
+    }
+    if (draft.date > maxDocDate(futureDocDays, todayInKorea())) {
       setSheetError(
-        "실사 일자를 확인해 주세요. 오늘 이후의 날짜로는 실사할 수 없습니다."
+        docDateLimitMessage(futureDocDays, todayInKorea(), "실사 일자는")
       )
       return
     }
@@ -1023,7 +1041,7 @@ export function CountDialog({
                 <Input
                   id="count-date"
                   type="date"
-                  max={today}
+                  max={maxDocDate(futureDocDays, today)}
                   value={draft.date}
                   disabled={isSaving}
                   onChange={(event) =>
@@ -1034,11 +1052,19 @@ export function CountDialog({
                   }
                   className="h-8 w-40 rounded-sm tabular-nums"
                 />
-                {draft.date !== today && isCalendarDate(draft.date) && (
+                {draft.date < today && isCalendarDate(draft.date) && (
                   <span className="text-xs text-muted-foreground">
                     지난 날짜로 실사
                   </span>
                 )}
+                <ScheduledBadge
+                  date={draft.date}
+                  today={today}
+                  title="오늘 이후 날짜: 그날까지의 예정 전표를 포함한 마감 수량으로 실사합니다."
+                />
+                <span className="text-xs text-muted-foreground">
+                  {docDateLimitHint(futureDocDays, today)}
+                </span>
               </SearchField>
               <SearchField label="창고" htmlFor="count-warehouse">
                 <SimpleSelect

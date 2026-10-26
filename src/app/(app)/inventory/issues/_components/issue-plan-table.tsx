@@ -14,19 +14,33 @@ import { ExpiryText } from "@/components/inventory/expiry-badge"
 import { ProductTypeBadge } from "@/components/inventory/stock-product-picker-dialog"
 import { StorageFitIcon } from "@/components/inventory/storage-fit"
 import type { IssueDemand, IssuePlan } from "@/lib/inventory/actions"
-import { formatPlacePath, formatStockQuantity } from "@/lib/inventory/constants"
+import {
+  afterDateText,
+  formatPlacePath,
+  formatStockQuantity,
+} from "@/lib/inventory/constants"
+import { todayInKorea } from "@/lib/inventory/schema"
 
 /**
  * "재고 부족: 필요 10개 · 출고 가능 7개 (같은 전표의 다른 줄에 먼저 배정한
- * 2개, 기한이 지난 재고 3개 제외)" — same wording as issue_stock's error.
+ * 2개, 기한이 지난 재고 3개, 내일 이후 전표가 쓰는 재고 2개, 내일 이후
+ * 들어오는 재고 5개 제외)" — same wording as issue_stock's error
+ * (stock_shortage_notes). `planDate` is the 출고일 of the plan.
  */
-export function shortageText(demand: IssueDemand): string {
+export function shortageText(demand: IssueDemand, planDate: string): string {
+  const after = afterDateText(planDate, todayInKorea())
   const notes = [
     demand.takenByOtherLines > 0
       ? `같은 전표의 다른 줄에 먼저 배정한 ${formatStockQuantity(demand.takenByOtherLines, demand.unit)}`
       : null,
     demand.expiredExcluded > 0
       ? `기한이 지난 재고 ${formatStockQuantity(demand.expiredExcluded, demand.unit)}`
+      : null,
+    demand.reservedLater > 0
+      ? `${after} 전표가 쓰는 재고 ${formatStockQuantity(demand.reservedLater, demand.unit)}`
+      : null,
+    demand.arrivingLater > 0
+      ? `${after} 들어오는 재고 ${formatStockQuantity(demand.arrivingLater, demand.unit)}`
       : null,
   ].filter((note): note is string => note !== null)
   const excluded = notes.length > 0 ? ` (${notes.join(", ")} 제외)` : ""
@@ -36,7 +50,10 @@ export function shortageText(demand: IssueDemand): string {
 /**
  * The FEFO plan of a 출고 전표 (배정 미리보기): per line and 기준상품 (a
  * 묶음상품 line has one per 구성상품) the lots and 위치 it takes, earliest
- * 기한 first, with the D-day, and a red row where stock is short.
+ * 기한 first, with the D-day (from today), and a red row where stock is
+ * short. The plan is made for its 출고일 (plan.docDate): lots past their
+ * 기한 that day, stock received later and stock that later 전표 use are
+ * left out.
  */
 export function IssuePlanTable({
   plan,
@@ -129,7 +146,7 @@ export function IssuePlanTable({
                   >
                     <span className="sticky left-2">
                       {line.line}번째 줄 {demand.code} {demand.name} —{" "}
-                      {shortageText(demand)}
+                      {shortageText(demand, plan.docDate)}
                     </span>
                   </td>
                 </tr>

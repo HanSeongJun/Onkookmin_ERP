@@ -96,6 +96,108 @@ export function formatDaysLeft(daysLeft: number | null | undefined): string {
   return daysLeft > 0 ? `D-${daysLeft}` : `D+${-daysLeft}`
 }
 
+// ---------------------------------------------------------------------------
+// 전표 일자: up to today + N days (예정 전표, 새벽배송)
+// ---------------------------------------------------------------------------
+
+/**
+ * Default of the setting app_settings.future_doc_days: a 전표 may be dated
+ * up to 7 days after today (새벽배송: tomorrow's 출고 is entered today).
+ */
+export const DEFAULT_FUTURE_DOC_DAYS = 7
+
+/** Largest value of that setting (the database checks 0–30). */
+export const FUTURE_DOC_DAYS_MAX = 30
+
+/**
+ * The calendar date `days` days after (or before, when negative) a
+ * "YYYY-MM-DD" date.
+ * @example shiftDate("2026-10-23", 7) // "2026-10-30"
+ */
+export function shiftDate(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00Z`)
+  value.setUTCDate(value.getUTCDate() + days)
+  return value.toISOString().slice(0, 10)
+}
+
+/**
+ * The latest date a new 전표 may have: today + the setting (same rule as
+ * the database's stock_max_doc_date: change both together).
+ * @example maxDocDate(7, "2026-10-23") // "2026-10-30"
+ */
+export function maxDocDate(futureDays: number, today: string): string {
+  return shiftDate(today, futureDays)
+}
+
+/**
+ * The hint under every 전표 date box.
+ * @example docDateLimitHint(7, "2026-10-23") // "오늘 이후 7일(10-30)까지"
+ * @example docDateLimitHint(0, "2026-10-23") // "오늘 이후는 안 됩니다"
+ */
+export function docDateLimitHint(futureDays: number, today: string): string {
+  if (futureDays <= 0) return "오늘 이후는 안 됩니다"
+  return `오늘 이후 ${futureDays}일(${maxDocDate(futureDays, today).slice(5)})까지`
+}
+
+/**
+ * The error of a date after maxDocDate — the same text as the database's
+ * stock_doc_date_limit_message (change both together). `subject` is the
+ * field with its particle ("전표 일자는", "입고일은", "실사 일자는").
+ * @example docDateLimitMessage(7, "2026-10-23") // "전표 일자는 오늘 이후 7일(2026-10-30)까지 정할 수 있습니다."
+ */
+export function docDateLimitMessage(
+  futureDays: number,
+  today: string,
+  subject = "전표 일자는"
+): string {
+  if (futureDays <= 0) {
+    return `${subject} 오늘(${today}) 이후로 정할 수 없습니다.`
+  }
+  return `${subject} 오늘 이후 ${futureDays}일(${maxDocDate(futureDays, today)})까지 정할 수 있습니다.`
+}
+
+/**
+ * A 전표 dated after today is "예정" (scheduled; e.g. tomorrow's 새벽배송
+ * 출고). Its stock is already counted in 재고처별 재고현황.
+ * @example isScheduledDate("2026-10-24", "2026-10-23") // true
+ */
+export function isScheduledDate(
+  date: string | null | undefined,
+  today: string
+): boolean {
+  return !!date && date > today
+}
+
+/**
+ * The dates a 취소 of a 전표 dated `originalDate` may have (same rule as
+ * the database's reverse_stock_document): from that date to today + the
+ * setting — or to the original date itself when that is later, so a 예정
+ * 전표 can always be undone on its own date. The default is today, or the
+ * original date of a 예정 전표.
+ * @example reversalDateRange("2026-10-24", 7, "2026-10-23") // { min: "2026-10-24", max: "2026-10-30", defaultDate: "2026-10-24" }
+ */
+export function reversalDateRange(
+  originalDate: string,
+  futureDays: number,
+  today: string
+): { min: string; max: string; defaultDate: string } {
+  const limit = maxDocDate(futureDays, today)
+  return {
+    min: originalDate,
+    max: originalDate > limit ? originalDate : limit,
+    defaultDate: originalDate > today ? originalDate : today,
+  }
+}
+
+/**
+ * "내일 이후" for today's 전표, else "10-25 이후" (the day after `date`):
+ * the words of a 재고 부족 note about later 전표 (same as the database's
+ * stock_shortage_notes).
+ */
+export function afterDateText(date: string, today: string): string {
+  return date === today ? "내일 이후" : `${shiftDate(date, 1).slice(5)} 이후`
+}
+
 /**
  * The 기한일 worked out from 제조일자 and the product's 유통기한 기준일수
  * ("제조일로부터 N일"): the 제조일자 counts as day 1, so it is 제조일자 +

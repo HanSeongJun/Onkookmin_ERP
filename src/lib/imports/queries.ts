@@ -204,8 +204,19 @@ export async function findOpeningStockRefs(keys: {
   if (error) throw rpcFailed("재고 기초 자료를 확인하지 못했습니다", error)
   const refs = openingStockRefsSchema.parse(data)
   const { data: today } = await supabase.rpc("stock_today")
+  // "*": without migration *_inventory_future_dates there is no
+  // future_doc_days yet (then 입고일 may be today at most, as before).
+  const { data: settings } = await supabase
+    .from("app_settings")
+    .select("*")
+    .eq("id", 1)
+    .maybeSingle()
   return {
     today: typeof today === "string" ? today : undefined,
+    futureDocDays:
+      typeof settings?.future_doc_days === "number"
+        ? settings.future_doc_days
+        : 0,
     products: refs.products.map((row) => ({
       code: row.code,
       name: row.name,

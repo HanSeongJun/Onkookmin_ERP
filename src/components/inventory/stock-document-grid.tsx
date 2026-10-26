@@ -10,6 +10,7 @@ import {
   DataGridRow,
 } from "@/components/erp/data-grid"
 import type { StockDocumentRow } from "@/lib/inventory/queries"
+import { todayInKorea } from "@/lib/inventory/schema"
 import { formatDateTime, formatNumber } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
@@ -18,6 +19,7 @@ import {
   stockDocumentProductsLabel,
   type StockDocumentAmountColumns,
 } from "./document-screens"
+import { ScheduledBadge } from "./scheduled-badge"
 
 /** 정상 / 취소됨 / 취소 전표 of a row. */
 export function StockDocumentStatus({
@@ -80,6 +82,7 @@ export function StockDocumentGrid({
     activeId && rows.some((row) => row.id === activeId)
       ? activeId
       : (rows[0]?.id ?? null)
+  const today = todayInKorea()
 
   return (
     <DataGrid
@@ -89,7 +92,7 @@ export function StockDocumentGrid({
     >
       <DataGridHeader>
         <tr>
-          <DataGridHead className="w-24">전표일자</DataGridHead>
+          <DataGridHead className="w-32">전표일자</DataGridHead>
           <DataGridHead className="w-40">전표번호</DataGridHead>
           <DataGridHead className="w-20">구분</DataGridHead>
           {partnerLabel && (
@@ -160,7 +163,10 @@ export function StockDocumentGrid({
                 )}
               >
                 <DataGridCell align="center" className="tabular-nums">
-                  {row.docDate}
+                  <span className="inline-flex items-center gap-1">
+                    {row.docDate}
+                    <ScheduledBadge date={row.docDate} today={today} />
+                  </span>
                 </DataGridCell>
                 <DataGridCell align="center">
                   <button

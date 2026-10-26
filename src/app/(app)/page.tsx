@@ -13,6 +13,7 @@ import {
 
 import { actionButtonClassName } from "@/components/erp/action-bar"
 import { InventoryNotReady } from "@/components/inventory/inventory-notices"
+import { ScheduledBadge } from "@/components/inventory/scheduled-badge"
 import {
   stockDocumentHref,
   stockDocumentKindLabel,
@@ -37,10 +38,13 @@ import {
   InventoryNotReadyError,
   type StockDashboard,
 } from "@/lib/inventory/queries"
+import { shiftDate } from "@/lib/inventory/constants"
 import {
   buildLotStockHref,
+  buildStockDocumentListHref,
   buildStockReportHref,
   defaultLotStockParams,
+  defaultStockDocumentListParams,
   defaultStockReportParams,
   STOCK_DOCUMENT_SCREENS,
 } from "@/lib/inventory/schema"
@@ -307,18 +311,65 @@ function StockCard({
   )
 }
 
-/** The latest 전표 (newest first); each opens on its 전표 screen. */
+/** "예정 전표 N건 (출고 M건) · 10-24 ~ 10-25 — 재고에는 이미 반영". */
+function ScheduledSummary({ dashboard }: { dashboard: StockDashboard }) {
+  const scheduled = dashboard.scheduled
+  return (
+    <>
+      <ScheduledBadge
+        date={scheduled.lastDate}
+        today={dashboard.today}
+        title="오늘 이후 날짜의 예정 전표"
+      />
+      예정 전표 {formatNumber(scheduled.documentCount, 0)}건
+      {scheduled.issueCount > 0 &&
+        ` (출고 ${formatNumber(scheduled.issueCount, 0)}건)`}
+      {scheduled.firstDate &&
+        scheduled.lastDate &&
+        ` · ${scheduled.firstDate.slice(5)}${scheduled.lastDate !== scheduled.firstDate ? ` ~ ${scheduled.lastDate.slice(5)}` : ""}`}
+      {" — 재고에는 이미 반영"}
+    </>
+  )
+}
+
+/**
+ * The latest 전표 (newest first); each opens on its 전표 screen. 전표 dated
+ * after today carry "예정" (e.g. tomorrow's 새벽배송 출고), and a line above
+ * counts every 예정 전표 with a link to the 예정 출고.
+ */
 function RecentDocuments({ dashboard }: { dashboard: StockDashboard }) {
   const documents = dashboard.recentDocuments
+  const scheduled = dashboard.scheduled
+  const scheduledIssuesHref = buildStockDocumentListHref("issue", {
+    ...defaultStockDocumentListParams(),
+    from: shiftDate(dashboard.today, 1),
+  })
   return (
     <section
       aria-labelledby="recent-documents-title"
       className="flex flex-col gap-2"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 id="recent-documents-title" className="font-bold">
-          최근 재고 전표
-        </h2>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <h2 id="recent-documents-title" className="font-bold">
+            최근 재고 전표
+          </h2>
+          {scheduled.documentCount > 0 &&
+            // A link to the 예정 출고 only when there are some (other 예정
+            // 전표, e.g. a 예정 입고, are listed on their own screens).
+            (scheduled.issueCount > 0 ? (
+              <Link
+                href={scheduledIssuesHref}
+                className="inline-flex items-center gap-1.5 rounded-sm text-[13px] text-brand-active underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <ScheduledSummary dashboard={dashboard} />
+              </Link>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 text-[13px] text-brand-active">
+                <ScheduledSummary dashboard={dashboard} />
+              </span>
+            ))}
+        </div>
         <div className="flex flex-wrap gap-x-3 gap-y-1 text-[13px]">
           {Object.values(STOCK_DOCUMENT_SCREENS).map((screen) => (
             <Link
@@ -334,7 +385,7 @@ function RecentDocuments({ dashboard }: { dashboard: StockDashboard }) {
       <DataGrid aria-label="최근 재고 전표" containerClassName="max-h-none">
         <DataGridHeader>
           <tr>
-            <DataGridHead className="w-24">전표일자</DataGridHead>
+            <DataGridHead className="w-32">전표일자</DataGridHead>
             <DataGridHead className="w-40">전표번호</DataGridHead>
             <DataGridHead className="w-24">구분</DataGridHead>
             <DataGridHead className="min-w-32">거래처</DataGridHead>
@@ -356,7 +407,13 @@ function RecentDocuments({ dashboard }: { dashboard: StockDashboard }) {
             return (
               <DataGridRow key={document.id}>
                 <DataGridCell align="center" className="tabular-nums">
-                  {document.docDate}
+                  <span className="inline-flex items-center gap-1">
+                    {document.docDate}
+                    <ScheduledBadge
+                      date={document.docDate}
+                      today={dashboard.today}
+                    />
+                  </span>
                 </DataGridCell>
                 <DataGridCell align="center" className="tabular-nums">
                   {href ? (

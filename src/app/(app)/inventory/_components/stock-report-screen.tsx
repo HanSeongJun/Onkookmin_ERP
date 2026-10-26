@@ -14,6 +14,7 @@ import {
 } from "@/components/erp/action-bar"
 import { DataGridCount } from "@/components/erp/data-grid"
 import { downloadInventoryCsv } from "@/components/inventory/download-csv"
+import { ScheduledBadge } from "@/components/inventory/scheduled-badge"
 import { StockPagination } from "@/components/inventory/stock-pagination"
 import { useColumnOrder } from "@/hooks/use-column-order"
 import { useHotkeys } from "@/hooks/use-hotkeys"
@@ -333,8 +334,13 @@ export function StockReportScreen({
       <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
         <div className="flex flex-wrap items-center gap-2">
           <DataGridCount shown={report.rows.length} total={report.total} />
-          <span className="text-[13px] text-muted-foreground">
+          <span className="inline-flex items-center gap-1 text-[13px] text-muted-foreground">
             조회기간 {report.dateFrom} ~ {report.dateTo}
+            <ScheduledBadge
+              date={report.dateTo}
+              today={today}
+              title="조회기간이 오늘 이후까지라 예정 전표(오늘 이후 날짜)도 계산했습니다."
+            />
           </span>
           {isPending && (
             <LoaderCircleIcon
@@ -400,6 +406,10 @@ export function StockReportScreen({
         0원으로 계산한 재고가 있다는 뜻입니다. 기한 배지는 오늘 기준(기한 임박{" "}
         {formatNumber(warningDays, 0)}일 이내 노랑, 경과 빨강)입니다. 재고는
         기준상품에만 있으며, 묶음상품은 구성 기준상품으로 나뉘어 입출고됩니다.
+        조회기간 안에 오늘 이후 날짜의 예정 전표(예: 내일 새벽배송 출고)가
+        있으면 그것도 계산합니다. 기본 조회기간은 오늘까지라 예정 전표가 빠지고,
+        [내일까지]를 누르면 내일 예정 전표까지 들어간 기말재고를 봅니다
+        (재고처별 재고현황의 수량은 예정 전표까지 모두 반영된 수량입니다).
       </p>
 
       <CategoryPickerDialog

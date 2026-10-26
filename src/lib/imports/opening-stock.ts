@@ -1,8 +1,10 @@
 /**
  * 기초재고 일괄등록 (/imports/opening-stock): the stock on hand when the
  * company starts using 재고관리. One row = one lot of a 기준상품 at one
- * 창고 > 구역 > 선반 (위치). Registering makes ONE 기초재고 전표 dated
- * today (all rows or none; database function import_opening_stock).
+ * 창고 > 구역 > 선반 (위치). Registering makes ONE 기초재고 전표 (all rows
+ * or none; database function import_opening_stock) dated today — or, when
+ * a row's 입고일 is after today (at most today + the 재고 설정's days), the
+ * latest 입고일: a 예정 기초재고 whose stock can go out from that date.
  *
  * The spec (columns, template examples) and the check of a file. No server
  * imports: Client Components use this file too.
@@ -34,7 +36,9 @@ import {
 } from "@/lib/imports/values"
 import {
   STOCK_LIMITS,
+  docDateLimitMessage,
   expiryStatus,
+  maxDocDate,
   parseStockQuantity,
   suggestExpiryDate,
   type ExpiryKind,
@@ -85,7 +89,7 @@ export const OPENING_STOCK_IMPORT: ImportSpec = {
   savedCodesLabel: "로트번호",
   instructions: [
     "‘기초재고’ 시트의 2행부터 한 줄에 로트(같은 기한으로 들어온 묶음) 하나씩 적어 주세요. 첫 줄(열 이름)은 지우거나 바꾸지 마세요. 열 이름 뒤의 *는 꼭 채워야 하는 칸입니다.",
-    "지금 창고에 있는 재고를 처음 넣을 때 씁니다. 등록하면 오늘 날짜의 ‘기초재고’ 전표 하나로 저장되고, 잘못 넣었으면 재고관리 → 입고 등록에서 그 전표를 열어 [전표 취소]로 되돌릴 수 있습니다.",
+    "지금 창고에 있는 재고를 처음 넣을 때 씁니다. 등록하면 오늘 날짜의 ‘기초재고’ 전표 하나로 저장되고(입고일이 오늘 이후인 행이 있으면 가장 늦은 입고일 날짜의 예정 전표), 잘못 넣었으면 재고관리 → 입고 등록에서 그 전표를 열어 [전표 취소]로 되돌릴 수 있습니다.",
     "상품코드는 기준상품코드만 됩니다(묶음상품은 구성 기준상품으로 나눠 적어 주세요). 수량은 상품의 단위로 적고, kg·g·L·mL 단위만 소수점(3자리까지)을 쓸 수 있습니다.",
     "창고코드·구역코드·선반코드는 창고·로케이션 설정에 먼저 만들어 두어야 합니다. 선반코드를 비우면 구역의 ‘기본’ 위치에 넣습니다.",
     "기한종류는 소비기한·유통기한·없음 중 하나입니다. 기한일을 비우고 제조일자를 적으면 ‘제조일자 + 상품의 유통기한 기준일수’로 계산합니다(제조일을 1일째로 셈).",
@@ -185,7 +189,7 @@ export const OPENING_STOCK_IMPORT: ImportSpec = {
           required: false,
           dateColumn: true,
           format: DATE_FORMAT,
-          help: "이 로트가 들어온 날 (비우면 오늘). 같은 기한이면 먼저 들어온 로트부터 출고됩니다.",
+          help: "이 로트가 들어온 날 (비우면 기초재고 전표 날짜, 보통 오늘). 오늘 이후는 재고 설정의 일수까지 되며(예정), 그러면 기초재고 전표가 그 날짜로 등록되어 그날부터 출고할 수 있습니다. 같은 기한이면 먼저 들어온 로트부터 출고됩니다.",
           width: 12,
           textFormat: false,
         },
@@ -339,8 +343,13 @@ export type OpeningStockLookups = {
       }[]
     }[]
   }[]
-  /** Today in Korea ("YYYY-MM-DD"): the 전표 date. */
+  /** Today in Korea ("YYYY-MM-DD"). */
   today?: string
+  /**
+   * 전표 일자 허용 범위 (재고 설정): 입고일 up to today + this many days
+   * (default 0 = today at most).
+   */
+  futureDocDays?: number
 }
 
 /** One row for import_opening_stock (database keys). */
@@ -406,10 +415,35 @@ type RowState = {
   note: string | null
 }
 
+/** The 입고일 cell of a row when it is a date ("" / invalid → null). */
+function receivedDateOf(raw: ImportRawRow): string | null {
+  const text = dateText(raw.values.receivedDate)
+  return text !== "" && isCalendarDate(text) ? text : null
+}
+
+/**
+ * The date of the 기초재고 전표 (same rule as import_opening_stock): today,
+ * or the latest 입고일 when it is later (only 입고일 within the limit
+ * count; later ones are errors).
+ */
+function openingDocDate(
+  receivedDates: readonly (string | null)[],
+  today: string,
+  limit: string
+): string {
+  let date = today
+  for (const received of receivedDates) {
+    if (received && received > date && received <= limit) date = received
+  }
+  return date
+}
+
 function checkRow(
   raw: ImportRawRow,
   lookups: OpeningStockLookups,
-  today: string
+  today: string,
+  futureDays: number,
+  docDate: string
 ): RowState {
   const issues = new RowIssues()
   addCellFlags(issues, raw)
@@ -522,9 +556,19 @@ function checkRow(
   const receivedDate = readDate("receivedDate", "입고일")
   const manufacturedDate = readDate("manufacturedDate", "제조일자")
   let expiryDate = readDate("expiryDate", "기한일")
-  const received = receivedDate ?? today
-  if (receivedDate && receivedDate > today) {
-    issues.error("receivedDate", `입고일은 오늘(${today}) 이후일 수 없습니다.`)
+  // A blank 입고일 = the 전표 date (today, or the latest 입고일 of the file).
+  const received = receivedDate ?? docDate
+  if (receivedDate && receivedDate > maxDocDate(futureDays, today)) {
+    issues.error(
+      "receivedDate",
+      docDateLimitMessage(futureDays, today, "입고일은")
+    )
+  } else if (receivedDate && receivedDate > today) {
+    issues.warn(
+      "receivedDate",
+      `입고일이 오늘 이후입니다. 기초재고 전표가 ${docDate} 날짜(예정)로 등록되어, 이 파일의 재고는 모두 ${docDate}부터 출고할 수 있습니다.`
+    )
+    notes.push(`예정 ${receivedDate.slice(5)}`)
   }
   if (manufacturedDate && manufacturedDate > received) {
     issues.error(
@@ -570,14 +614,17 @@ function checkRow(
   if (expiryDate && manufacturedDate && expiryDate < manufacturedDate) {
     issues.error("expiryDate", "기한일은 제조일자보다 빠를 수 없습니다.")
   }
+  // Past its 기한 on the 전표 date (where the stock appears).
   if (
     expiryDate &&
     expiryKind !== "none" &&
-    expiryStatus(expiryDate, 0, today) === "expired"
+    expiryStatus(expiryDate, 0, docDate) === "expired"
   ) {
     issues.warn(
       "expiryDate",
-      "기한이 이미 지난 재고입니다. 출고에서 빠지며, 등록한 뒤 폐기 등록으로 정리할 수 있습니다."
+      docDate === today
+        ? "기한이 이미 지난 재고입니다. 출고에서 빠지며, 등록한 뒤 폐기 등록으로 정리할 수 있습니다."
+        : `기초재고 전표 날짜(${docDate})에 이미 기한이 지난 재고입니다. 출고에서 빠지며, 등록한 뒤 폐기 등록으로 정리할 수 있습니다.`
     )
   }
 
@@ -707,31 +754,35 @@ function checkRow(
  * rows for import_opening_stock:
  * 1. each row: 상품 (기준상품, 사용), 수량 (by the product's 단위), 창고 >
  *    구역 > 선반 (사용; blank 선반 = 기본 위치), 기한종류 / 기한일 (or
- *    제조일자 + 유통기한 기준일수), 날짜 order, 로트번호, 입고단가, 매입처;
- *    notes for 보관온도 불일치 and stock already past its 기한;
+ *    제조일자 + 유통기한 기준일수), 날짜 order (입고일 at most today + the
+ *    재고 설정's days), 로트번호, 입고단가, 매입처; notes for 보관온도
+ *    불일치, stock already past its 기한 on the 전표 date and a 예정 입고일;
  * 2. the same 로트번호 twice for one 상품 in the file.
+ * The 전표 date is today or the latest 입고일 of the 정상 rows (as the
+ * database decides it); blank 입고일 get that date.
  */
 export function checkOpeningStockImport(
   input: ImportInput,
   lookups: OpeningStockLookups
 ): { preview: ImportPreview; payload: OpeningStockImportPayload } {
   const today = lookups.today ?? todayInKorea()
-  const rows = (input.sheets[MAIN_SHEET] ?? []).map((raw) =>
-    checkRow(raw, lookups, today)
+  const futureDays = lookups.futureDocDays ?? 0
+  const limit = maxDocDate(futureDays, today)
+  const raws = input.sheets[MAIN_SHEET] ?? []
+  // First with every row's 입고일; again when the 정상 rows decide another
+  // date (a row with the latest 입고일 may have another error).
+  let docDate = openingDocDate(raws.map(receivedDateOf), today, limit)
+  let rows = checkRows(raws, lookups, today, futureDays, docDate)
+  const okDocDate = openingDocDate(
+    rows.map((state) =>
+      state.issues.hasErrors || !state.row ? null : state.row.received_date
+    ),
+    today,
+    limit
   )
-
-  for (const [state, others] of findDuplicates(
-    rows,
-    (state) =>
-      state.lotNo ? `${codeKey(state.productCode)}\u001f${state.lotNo}` : null,
-    (state) => ({ sheetLabel: null, excelRow: state.raw.excelRow }),
-    codeKey
-  )) {
-    state.issues.error(
-      "lotNo",
-      `파일 안에서 같은 상품에 같은 로트번호가 또 있습니다 (${placesText(others)}).`
-    )
-    state.row = null
+  if (okDocDate !== docDate) {
+    docDate = okDocDate
+    rows = checkRows(raws, lookups, today, futureDays, docDate)
   }
 
   const results: ImportRowResult[] = rows.map((state) => ({
@@ -750,4 +801,32 @@ export function checkOpeningStockImport(
       ),
     },
   }
+}
+
+/** Every row checked for one 전표 date, then 로트번호 twice in the file. */
+function checkRows(
+  raws: readonly ImportRawRow[],
+  lookups: OpeningStockLookups,
+  today: string,
+  futureDays: number,
+  docDate: string
+): RowState[] {
+  const rows = raws.map((raw) =>
+    checkRow(raw, lookups, today, futureDays, docDate)
+  )
+
+  for (const [state, others] of findDuplicates(
+    rows,
+    (state) =>
+      state.lotNo ? `${codeKey(state.productCode)}\u001f${state.lotNo}` : null,
+    (state) => ({ sheetLabel: null, excelRow: state.raw.excelRow }),
+    codeKey
+  )) {
+    state.issues.error(
+      "lotNo",
+      `파일 안에서 같은 상품에 같은 로트번호가 또 있습니다 (${placesText(others)}).`
+    )
+    state.row = null
+  }
+  return rows
 }

@@ -479,6 +479,14 @@ export function LotStockScreen({
             단가·금액은 로트 입고단가(부가세 포함) 기준이며, * 표시는 입고단가가
             없어 상품의 기본 매입가로 계산한 값입니다.
           </p>
+          <p className="text-xs text-muted-foreground">
+            <strong className="font-bold text-foreground">
+              수량은 등록한 모든 전표를 반영한 수량입니다.
+            </strong>{" "}
+            오늘 이후 날짜의 예정 출고(예: 내일 새벽배송)는 이미 빠져 있고, 예정
+            입고는 이미 들어 있습니다(입고일에 ‘예정’ 표시 — 그 날짜부터 쓸 수
+            있음). 날짜별 수량은 상품별 재고현황에서 조회기간으로 봅니다.
+          </p>
         </div>
       </div>
 

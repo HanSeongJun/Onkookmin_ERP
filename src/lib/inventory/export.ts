@@ -277,7 +277,8 @@ export function buildStockLedgerCsv(ledger: StockLedger): string {
     ...ledger.lines.map((line) => ({
       docDate: line.docDate,
       docNo: line.docNo,
-      kind: movementLabel(line.movementType, line.isReversal),
+      // "당일취소": a 전표 undone on its own date (the 잔량 stays).
+      kind: `${movementLabel(line.movementType, line.isReversal)}${line.sameDayCancelled ? " (당일취소)" : ""}`,
       partner: line.partnerName,
       lotNo: line.lotNo,
       expiry: line.expiryDate

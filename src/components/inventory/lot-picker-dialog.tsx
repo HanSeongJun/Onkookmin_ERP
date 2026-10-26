@@ -30,12 +30,14 @@ import { formatPlacePath, formatStockQuantity } from "@/lib/inventory/constants"
 import type { LotStockRow } from "@/lib/inventory/queries"
 import {
   LOT_EXPIRY_FILTERS,
+  todayInKorea,
   type LotExpiryFilter,
 } from "@/lib/inventory/schema"
 import { formatNumber } from "@/lib/format"
 
 import { ExpiryText } from "./expiry-badge"
 import { placeFilterIds, type StockPlaceLevel } from "./place-tree"
+import { ScheduledBadge } from "./scheduled-badge"
 import { StockPlaceField } from "./stock-place-field"
 import { StorageFitIcon } from "./storage-fit"
 import { useStockPlaces } from "./use-stock-places"
@@ -531,7 +533,14 @@ export function LotPickerDialog({
                       {formatStockQuantity(row.quantity, row.productUnit)}
                     </DataGridCell>
                     <DataGridCell align="center" className="tabular-nums">
-                      {row.receivedDate}
+                      <span className="inline-flex items-center gap-1">
+                        {row.receivedDate}
+                        <ScheduledBadge
+                          date={row.receivedDate}
+                          today={todayInKorea()}
+                          title="오늘 이후 날짜의 예정 입고입니다. 그 날짜부터 폐기·이동할 수 있습니다."
+                        />
+                      </span>
                     </DataGridCell>
                   </DataGridRow>
                 )

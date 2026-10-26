@@ -33,6 +33,7 @@ import type {
   StockDocumentDetail,
   StockDocumentLine,
 } from "@/lib/inventory/queries"
+import { todayInKorea } from "@/lib/inventory/schema"
 import { isUuid } from "@/lib/products/schema"
 import { daysUntil, formatDateTime, formatNumber } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -40,6 +41,7 @@ import { cn } from "@/lib/utils"
 import { isNestedDialogOpen } from "./dialog-helpers"
 import { stockDocumentKindLabel } from "./document-screens"
 import { ExpiryText } from "./expiry-badge"
+import { ScheduledBadge } from "./scheduled-badge"
 import { StockDocumentStatus } from "./stock-document-grid"
 import { StockReversalDialog } from "./stock-reversal-dialog"
 import { StorageFitIcon } from "./storage-fit"
@@ -221,7 +223,10 @@ function DocumentBody({
           </FormRow>
           <FormRow label="구분">{stockDocumentKindLabel(document)}</FormRow>
           <FormRow label="전표일자">
-            <span className="tabular-nums">{document.docDate}</span>
+            <span className="inline-flex items-center gap-1.5 tabular-nums">
+              {document.docDate}
+              <ScheduledBadge date={document.docDate} today={todayInKorea()} />
+            </span>
           </FormRow>
           {document.partnerName && (
             <FormRow label="거래처">

@@ -57,6 +57,7 @@ import {
 } from "@/components/inventory/number-inputs"
 import type { StockNewDialogProps } from "@/components/inventory/stock-document-list-screen"
 import { useFocusAfterAppend } from "@/components/inventory/use-focus-after-append"
+import { ScheduledBadge } from "@/components/inventory/scheduled-badge"
 import { useInitialLotRows } from "@/components/inventory/use-initial-lot-rows"
 import { useNewModalStillShown } from "@/components/inventory/use-new-modal-still-shown"
 import { Input } from "@/components/ui/input"
@@ -71,13 +72,15 @@ import { useHotkeys } from "@/hooks/use-hotkeys"
 import { createDisposal, type StockSaveResult } from "@/lib/inventory/actions"
 import {
   DISPOSAL_REASONS,
+  docDateLimitHint,
   formatStockQuantity,
+  maxDocDate,
   STOCK_LIMITS,
   type DisposalReason,
 } from "@/lib/inventory/constants"
 import type { LotStockRow } from "@/lib/inventory/queries"
 import {
-  disposalFormSchema,
+  makeDisposalFormSchema,
   todayInKorea,
   type DisposalFormInput,
   type DisposalFormValues,
@@ -118,7 +121,8 @@ function rowKey(lotId: string, locationId: string): string {
  * 폐기 등록 modal (?modal=new on /inventory/disposals; ?balances=… adds the
  * rows checked on 재고처별 재고현황).
  *
- * - 머리: 폐기일 (default today, earlier allowed), 기본 사유 (for new
+ * - 머리: 폐기일 (default today, earlier allowed, later up to today + the
+ *   재고 설정's days = 예정), 기본 사유 (for new
  *   lines; [모든 줄에 적용]), 메모.
  * - 줄: [재고 추가] opens the lot picker, showing 기한 경과·임박 stock
  *   first (any stock can be found with its filters). Each line is one lot
@@ -132,9 +136,11 @@ export function DisposalDialog({
   onClose,
   onSaved,
   initialBalanceIds,
+  futureDocDays,
 }: StockNewDialogProps) {
   const [requestId] = useState(() => newRequestId())
   const today = todayInKorea()
+  const [schema] = useState(() => makeDisposalFormSchema(futureDocDays))
   const isStillShown = useNewModalStillShown()
 
   const [rows, setRows] = useState<ReadonlyMap<string, LotStockRow>>(
@@ -146,7 +152,7 @@ export function DisposalDialog({
   const submittingRef = useRef(false)
 
   const form = useForm<DisposalFormInput, unknown, DisposalFormValues>({
-    resolver: zodResolver(disposalFormSchema),
+    resolver: zodResolver(schema),
     defaultValues: { requestId, docDate: today, memo: "", lines: [] },
     shouldFocusError: false,
   })
@@ -157,6 +163,7 @@ export function DisposalDialog({
   } = form
   const { fields, append, remove } = useFieldArray({ control, name: "lines" })
   const lines = useWatch({ control, name: "lines" })
+  const docDate = useWatch({ control, name: "docDate" })
   const focusLine = useFocusAfterAppend(FORM_ID, fields.length)
 
   useEffect(() => {
@@ -395,16 +402,21 @@ export function DisposalDialog({
                 required
                 error={errors.docDate?.message}
                 errorId={fieldErrorId(FORM_ID, "docDate")}
-                hint="오늘 이후는 안 됩니다"
+                hint={docDateLimitHint(futureDocDays, today)}
               >
                 <Input
                   id={fieldDomId(FORM_ID, "docDate")}
                   type="date"
-                  max={today}
+                  max={maxDocDate(futureDocDays, today)}
                   aria-required
                   aria-invalid={!!errors.docDate}
                   className="h-8 w-40 rounded-sm"
                   {...register("docDate")}
+                />
+                <ScheduledBadge
+                  date={docDate}
+                  today={today}
+                  title="오늘 이후 날짜: 예정 폐기로 저장됩니다. 그 날짜에 남아 있는 재고만 폐기할 수 있습니다."
                 />
               </FormRow>
               <FormRow label="기본 사유" htmlFor={`${FORM_ID}-default-reason`}>

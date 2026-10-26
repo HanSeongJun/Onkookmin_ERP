@@ -71,6 +71,11 @@ export type StockNewDialogProps = {
   initialBalanceIds: string[]
   /** 기한 임박 기준일 (재고 설정), for D-day badges. */
   expiryWarningDays: number
+  /**
+   * 전표 일자 허용 범위 (재고 설정): the 전표 may be dated up to today + this
+   * many days (예정 전표, e.g. tomorrow's 새벽배송 출고).
+   */
+  futureDocDays: number
 }
 
 /**
@@ -99,7 +104,8 @@ export function StockDocumentListScreen({
   /** Short help under the grid. */
   notes?: React.ReactNode
 }) {
-  const { screen, rows, total, pageCount, expiryWarningDays } = data
+  const { screen, rows, total, pageCount, expiryWarningDays, futureDocDays } =
+    data
   const text = STOCK_DOCUMENT_SCREEN_TEXT[screen]
   // The URL's conditions plus the 구분 filter ("kind").
   const params: ShellParams = { ...data.params, kind: data.kind }
@@ -425,6 +431,11 @@ export function StockDocumentListScreen({
           열립니다. 저장한 전표는 고칠 수 없고, 잘못 넣었으면 전표를 열어 [전표
           취소]로 되돌린 뒤 다시 등록합니다.
         </p>
+        <p>
+          {futureDocDays > 0
+            ? `전표 일자는 오늘 이후 ${futureDocDays}일까지 정할 수 있습니다(창고·로케이션 설정 → 재고 설정). 오늘 이후 날짜의 전표에는 ‘예정’이 붙고, 재고 수량에는 이미 반영됩니다.`
+            : "전표 일자는 오늘까지 정할 수 있습니다. 내일 날짜(예: 새벽배송 출고)로 등록하려면 창고·로케이션 설정 → 재고 설정에서 ‘전표 일자 허용 범위’를 늘려 주세요."}
+        </p>
       </div>
 
       {modal?.mode === "new" && (
@@ -434,6 +445,7 @@ export function StockDocumentListScreen({
           onSaved={saved}
           initialBalanceIds={balanceIds}
           expiryWarningDays={expiryWarningDays}
+          futureDocDays={futureDocDays}
         />
       )}
       {modal?.mode === "view" && (

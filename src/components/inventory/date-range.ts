@@ -23,15 +23,27 @@ export function addDays(date: string, days: number): string {
 export const DATE_FILTER_INPUT_CLASS = "h-8 w-38 rounded-sm tabular-nums"
 
 /** A quick choice of a period ([오늘], [최근 7일] …). */
-export type QuickRange = { label: string; from: string; to: string }
+export type QuickRange = {
+  label: string
+  from: string
+  to: string
+  /** Tooltip, when the label needs one. */
+  title?: string
+}
 
 /**
  * 오늘, 최근 7일, 최근 30일, 이번 달, 지난 달 (ending today, or last
- * month's end). "최근 N일" counts today: 최근 7일 = today − 6 … today.
+ * month's end), and 내일까지: the period shown now (`currentFrom`, or this
+ * month's 1st) up to tomorrow, so tomorrow's 예정 전표 (새벽배송 출고) are
+ * counted. "최근 N일" counts today: 최근 7일 = today − 6 … today.
  */
-export function quickRanges(today: string = todayInKorea()): QuickRange[] {
+export function quickRanges(
+  today: string = todayInKorea(),
+  currentFrom?: string
+): QuickRange[] {
   const firstOfMonth = `${today.slice(0, 8)}01`
   const lastMonthEnd = addDays(firstOfMonth, -1)
+  const tomorrow = addDays(today, 1)
   return [
     { label: "오늘", from: today, to: today },
     { label: "최근 7일", from: addDays(today, -6), to: today },
@@ -41,6 +53,12 @@ export function quickRanges(today: string = todayInKorea()): QuickRange[] {
       label: "지난 달",
       from: `${lastMonthEnd.slice(0, 8)}01`,
       to: lastMonthEnd,
+    },
+    {
+      label: "내일까지",
+      from: currentFrom && currentFrom <= tomorrow ? currentFrom : firstOfMonth,
+      to: tomorrow,
+      title: "조회기간 끝을 내일로 바꿉니다 (내일 날짜의 예정 전표 포함)",
     },
   ]
 }

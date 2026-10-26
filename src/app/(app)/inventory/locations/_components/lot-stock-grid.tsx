@@ -4,6 +4,7 @@ import Link from "next/link"
 import { Fragment, useId, useRef } from "react"
 
 import { ExpiryBadge } from "@/components/inventory/expiry-badge"
+import { ScheduledBadge } from "@/components/inventory/scheduled-badge"
 import { StorageFitIcon } from "@/components/inventory/storage-fit"
 import {
   DataGrid,
@@ -21,6 +22,7 @@ import type { LotStockRow } from "@/lib/inventory/queries"
 import {
   nextColumnSort,
   sortState,
+  todayInKorea,
   type LotStockColumnId,
   type LotStockSort,
 } from "@/lib/inventory/schema"
@@ -533,7 +535,14 @@ function LotCells({
     case "received_date":
       return (
         <DataGridCell align="center" className="tabular-nums" {...marks(0, 1)}>
-          {row.receivedDate}
+          <span className="inline-flex items-center gap-1">
+            {row.receivedDate}
+            <ScheduledBadge
+              date={row.receivedDate}
+              today={todayInKorea()}
+              title="오늘 이후 날짜의 예정 입고입니다. 이 재고는 그 날짜부터 출고·이동·폐기할 수 있습니다."
+            />
+          </span>
         </DataGridCell>
       )
     case "supplier":

@@ -13,20 +13,28 @@ import {
   reverseStockDocument,
   type StockSaveResult,
 } from "@/lib/inventory/actions"
-import { STOCK_LIMITS } from "@/lib/inventory/constants"
+import {
+  docDateLimitMessage,
+  isScheduledDate,
+  reversalDateRange,
+  STOCK_LIMITS,
+} from "@/lib/inventory/constants"
 import type { StockDocumentDetail } from "@/lib/inventory/queries"
 import { todayInKorea } from "@/lib/inventory/schema"
 
 import { newRequestId } from "./dialog-helpers"
 import { stockDocumentKindLabel } from "./document-screens"
+import { useInventorySettings } from "./use-inventory-settings"
 
 /**
  * 전표 취소 dialog: makes a 취소 전표 with the opposite of every line of
  * `document` (the original stays, marked 취소됨). 취소 일자 (default today,
- * not before the original's date, not in the future) and 메모 (default
+ * or the original date of a 예정 전표; not before the original's date, at
+ * most today + the 재고 설정's days — reversalDateRange) and 메모 (default
  * "<전표번호> 취소"). The database refuses when the stock it takes back is
- * gone (e.g. a 입고 already partly issued: undo that 출고 first) — the
- * message is shown here and nothing changes. F8 = 취소 전표 저장.
+ * gone (e.g. a 입고 already partly issued, also by a 예정 출고: undo that
+ * 출고 first) — the message is shown here and nothing changes. F8 = 취소
+ * 전표 저장.
  *
  * Mount it only while it is open; its save request id is made when it
  * opens (a retry after a lost answer never makes a second 취소 전표).
@@ -41,8 +49,15 @@ export function StockReversalDialog({
   onReversed: (result: Extract<StockSaveResult, { ok: true }>) => void
 }) {
   const today = todayInKorea()
+  const settings = useInventorySettings()
+  // Until the setting is read: today + 0 (the original's date for a 예정 전표).
+  const range = reversalDateRange(
+    document.docDate,
+    settings?.futureDocDays ?? 0,
+    today
+  )
   const [requestId] = useState(() => newRequestId())
-  const [docDate, setDocDate] = useState(today)
+  const [docDate, setDocDate] = useState(range.defaultDate)
   const [memo, setMemo] = useState("")
   const [error, setError] = useState<{
     message: string
@@ -60,9 +75,12 @@ export function StockReversalDialog({
       })
       return
     }
-    if (docDate && docDate > today) {
+    if (docDate && settings && docDate > range.max) {
       setError({
-        message: "취소 일자는 오늘 이후로 정할 수 없습니다.",
+        message:
+          document.docDate > range.max
+            ? `이 예정 전표는 원래 전표 일자(${document.docDate})로 취소해 주세요.`
+            : docDateLimitMessage(settings.futureDocDays, today, "취소 일자는"),
         field: "docDate",
       })
       return
@@ -73,7 +91,7 @@ export function StockReversalDialog({
       try {
         result = await reverseStockDocument(document.id, {
           requestId,
-          docDate: docDate === today ? "" : docDate,
+          docDate: docDate === range.defaultDate ? "" : docDate,
           memo,
         })
       } catch (caught) {
@@ -164,14 +182,18 @@ export function StockReversalDialog({
             required
             error={error?.field === "docDate" ? error.message : undefined}
             errorId="reversal-date-error"
-            hint={`원래 전표 일자 ${document.docDate} ~ 오늘`}
+            hint={
+              isScheduledDate(document.docDate, today)
+                ? `예정 전표: ${range.min} ~ ${range.max}`
+                : `원래 전표 일자 ${range.min} ~ ${range.max === today ? "오늘" : range.max}`
+            }
           >
             <Input
               id="reversal-date"
               type="date"
               value={docDate}
-              min={document.docDate}
-              max={today}
+              min={range.min}
+              max={settings ? range.max : undefined}
               aria-invalid={error?.field === "docDate"}
               aria-describedby={
                 error?.field === "docDate" ? "reversal-date-error" : undefined

@@ -20,6 +20,8 @@ import {
 import { ErpDialog } from "@/components/erp/erp-dialog"
 import { FormRow, FormTable } from "@/components/erp/form-table"
 import { newRequestId } from "@/components/inventory/dialog-helpers"
+import { ScheduledBadge } from "@/components/inventory/scheduled-badge"
+import { useInventorySettings } from "@/components/inventory/use-inventory-settings"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useHotkeys } from "@/hooks/use-hotkeys"
@@ -32,6 +34,7 @@ import {
 import {
   expiryKindLabel,
   formatStockQuantity,
+  reversalDateRange,
   STOCK_LIMITS,
 } from "@/lib/inventory/constants"
 import type { StockDocumentDetail } from "@/lib/inventory/queries"
@@ -212,7 +215,10 @@ function DocumentHeader({
           <span className="font-bold tabular-nums">{document.docNo}</span>
         </FormRow>
         <FormRow label="전표 일자">
-          <span className="tabular-nums">{document.docDate}</span>
+          <span className="inline-flex items-center gap-1.5 tabular-nums">
+            {document.docDate}
+            <ScheduledBadge date={document.docDate} today={todayInKorea()} />
+          </span>
         </FormRow>
         <FormRow label="구분">
           {document.docType === "reversal" ? "실사조정 취소" : "실사조정"}
@@ -464,8 +470,10 @@ function Message({
 }
 
 /**
- * [전표 취소] confirm: 취소 일자 (today by default; not before the 전표
- * date) and a memo (empty = "<전표번호> 취소"). F8 = 취소 전표 등록.
+ * [전표 취소] confirm: 취소 일자 (today by default, or the 전표 date of a
+ * 예정 실사; not before the 전표 date; at most today + the 재고 설정's days
+ * — reversalDateRange) and a memo (empty = "<전표번호> 취소"). F8 = 취소
+ * 전표 등록.
  */
 function ReverseDialog({
   document,
@@ -477,7 +485,14 @@ function ReverseDialog({
   onReversed: () => void
 }) {
   const [today] = useState(() => todayInKorea())
-  const [docDate, setDocDate] = useState(today)
+  const settings = useInventorySettings()
+  // Until the setting is read: today + 0 (the 전표 date of a 예정 실사).
+  const range = reversalDateRange(
+    document.docDate,
+    settings?.futureDocDays ?? 0,
+    today
+  )
+  const [docDate, setDocDate] = useState(range.defaultDate)
   const [memo, setMemo] = useState("")
   const [error, setError] = useState<{
     message: string
@@ -498,9 +513,12 @@ function ReverseDialog({
 
   function submit() {
     if (submittingRef.current) return
-    if (docDate && (docDate < document.docDate || docDate > today)) {
+    if (
+      docDate &&
+      (docDate < range.min || (settings !== null && docDate > range.max))
+    ) {
       setError({
-        message: `취소 일자는 ${document.docDate}부터 오늘(${today})까지 고를 수 있습니다.`,
+        message: `취소 일자는 ${range.min}부터 ${range.max === today ? `오늘(${today})` : range.max}까지 고를 수 있습니다.`,
         docDate: "날짜를 확인해 주세요.",
       })
       return
@@ -594,13 +612,13 @@ function ReverseDialog({
             htmlFor="reverse-date"
             error={error?.docDate}
             errorId="reverse-date-error"
-            hint={`${document.docDate} ~ 오늘`}
+            hint={`${range.min} ~ ${range.max === today ? "오늘" : range.max}`}
           >
             <Input
               id="reverse-date"
               type="date"
-              min={document.docDate}
-              max={today}
+              min={range.min}
+              max={settings ? range.max : undefined}
               value={docDate}
               aria-invalid={error?.docDate ? true : undefined}
               aria-describedby={

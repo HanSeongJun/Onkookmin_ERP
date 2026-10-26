@@ -93,7 +93,8 @@ export function StockDocumentSearchForm({
     >
       <SearchPanel>
         <SearchField label="전표일자" span={2}>
-          {/* The key resets the boxes when the period changes from outside. */}
+          {/* The key resets the boxes when the period changes from outside.
+              No upper limit: 예정 전표 (dated after today) are listed too. */}
           <span
             key={`${shown.from}~${shown.to}`}
             className="flex flex-wrap items-center gap-1"
@@ -103,7 +104,7 @@ export function StockDocumentSearchForm({
               name="from"
               aria-label="전표일자 시작"
               defaultValue={shown.from}
-              max={today}
+              max="2099-12-31"
               className={DATE_FILTER_INPUT_CLASS}
             />
             <span aria-hidden="true">~</span>
@@ -112,7 +113,7 @@ export function StockDocumentSearchForm({
               name="to"
               aria-label="전표일자 끝"
               defaultValue={shown.to}
-              max={today}
+              max="2099-12-31"
               className={DATE_FILTER_INPUT_CLASS}
             />
           </span>

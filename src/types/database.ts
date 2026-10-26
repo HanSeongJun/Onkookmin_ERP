@@ -19,6 +19,7 @@ export type Database = {
           created_at: string
           created_by: string | null
           expiry_warning_days: number
+          future_doc_days: number
           id: number
           updated_at: string
           updated_by: string | null
@@ -27,6 +28,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           expiry_warning_days?: number
+          future_doc_days?: number
           id?: number
           updated_at?: string
           updated_by?: string | null
@@ -35,6 +37,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           expiry_warning_days?: number
+          future_doc_days?: number
           id?: number
           updated_at?: string
           updated_by?: string | null
@@ -1042,6 +1045,13 @@ export type Database = {
             foreignKeyName: "stock_movements_reverses_movement_id_fkey"
             columns: ["reverses_movement_id"]
             isOneToOne: true
+            referencedRelation: "stock_history_lines"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "stock_movements_reverses_movement_id_fkey"
+            columns: ["reverses_movement_id"]
+            isOneToOne: true
             referencedRelation: "stock_movement_items"
             referencedColumns: ["id"]
           },
@@ -1449,14 +1459,14 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "product_categories_parent_id_fkey"
-            columns: ["category_grandparent_id"]
+            columns: ["category_parent_id"]
             isOneToOne: false
             referencedRelation: "product_categories"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "product_categories_parent_id_fkey"
-            columns: ["category_parent_id"]
+            columns: ["category_grandparent_id"]
             isOneToOne: false
             referencedRelation: "product_categories"
             referencedColumns: ["id"]
@@ -1751,14 +1761,14 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "product_categories_parent_id_fkey"
-            columns: ["category_parent_id"]
+            columns: ["category_grandparent_id"]
             isOneToOne: false
             referencedRelation: "product_categories"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "product_categories_parent_id_fkey"
-            columns: ["category_grandparent_id"]
+            columns: ["category_parent_id"]
             isOneToOne: false
             referencedRelation: "product_categories"
             referencedColumns: ["id"]
@@ -1851,6 +1861,96 @@ export type Database = {
             columns: ["reverses_id"]
             isOneToOne: true
             referencedRelation: "stock_documents"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      stock_history_lines: {
+        Row: {
+          doc_date: string | null
+          document_id: string | null
+          id: string | null
+          location_id: string | null
+          lot_id: string | null
+          product_id: string | null
+          quantity_delta: number | null
+          seq: number | null
+        }
+        Insert: {
+          doc_date?: string | null
+          document_id?: string | null
+          id?: string | null
+          location_id?: string | null
+          lot_id?: string | null
+          product_id?: string | null
+          quantity_delta?: number | null
+          seq?: number | null
+        }
+        Update: {
+          doc_date?: string | null
+          document_id?: string | null
+          id?: string | null
+          location_id?: string | null
+          lot_id?: string | null
+          product_id?: string | null
+          quantity_delta?: number | null
+          seq?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "stock_movements_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "stock_document_list_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "stock_movements_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "stock_documents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "stock_movements_location_id_fkey"
+            columns: ["location_id"]
+            isOneToOne: false
+            referencedRelation: "storage_location_items"
+            referencedColumns: ["location_id"]
+          },
+          {
+            foreignKeyName: "stock_movements_location_id_fkey"
+            columns: ["location_id"]
+            isOneToOne: false
+            referencedRelation: "storage_locations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "stock_movements_lot_id_fkey"
+            columns: ["lot_id"]
+            isOneToOne: false
+            referencedRelation: "stock_lots"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "stock_movements_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "product_list_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "stock_movements_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "product_stock_summary"
+            referencedColumns: ["product_id"]
+          },
+          {
+            foreignKeyName: "stock_movements_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
             referencedColumns: ["id"]
           },
         ]
@@ -2008,6 +2108,13 @@ export type Database = {
             foreignKeyName: "stock_movements_reverses_movement_id_fkey"
             columns: ["reverses_movement_id"]
             isOneToOne: true
+            referencedRelation: "stock_history_lines"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "stock_movements_reverses_movement_id_fkey"
+            columns: ["reverses_movement_id"]
+            isOneToOne: true
             referencedRelation: "stock_movement_items"
             referencedColumns: ["id"]
           },
@@ -2064,6 +2171,20 @@ export type Database = {
       apply_stock_count: {
         Args: { header: Json; lines: Json; new_lots?: Json }
         Returns: Json
+      }
+      check_stock_doc_date: {
+        Args: {
+          extra?: Json
+          field?: string
+          line_no?: number
+          subject?: string
+          value: string
+        }
+        Returns: undefined
+      }
+      check_stock_document_history: {
+        Args: { list?: string; target_document_id: string }
+        Returns: undefined
       }
       check_stock_header: { Args: { header: Json }; Returns: undefined }
       check_stock_input_location: {
@@ -2374,6 +2495,10 @@ export type Database = {
         }
         Returns: number
       }
+      stock_available_on: {
+        Args: { at_date?: string; target_product_ids: string[] }
+        Returns: Json
+      }
       stock_balance_as_of: {
         Args: {
           as_of: string
@@ -2400,10 +2525,15 @@ export type Database = {
         Returns: Json
       }
       stock_dashboard: { Args: { recent_limit?: number }; Returns: Json }
+      stock_doc_date_limit_message: {
+        Args: { subject?: string }
+        Returns: string
+      }
       stock_expiry_from_manufactured: {
         Args: { manufactured: string; shelf_life_days: number }
         Returns: string
       }
+      stock_future_doc_days: { Args: never; Returns: number }
       stock_integrity_check: {
         Args: never
         Returns: {
@@ -2440,7 +2570,19 @@ export type Database = {
           zone_storage_type: Database["public"]["Enums"]["storage_type"]
         }[]
       }
+      stock_max_doc_date: { Args: never; Returns: string }
       stock_number_text: { Args: { sequence_number: number }; Returns: string }
+      stock_pair_at: {
+        Args: {
+          at_date: string
+          target_location_id: string
+          target_lot_id: string
+        }
+        Returns: {
+          available: number
+          on_date: number
+        }[]
+      }
       stock_period_report: {
         Args: {
           date_from: string
@@ -2471,6 +2613,22 @@ export type Database = {
           target_document: Database["public"]["Tables"]["stock_documents"]["Row"]
         }
         Returns: Json
+      }
+      stock_shortage_notes: {
+        Args: { demand: Json; plan_date: string }
+        Returns: string
+      }
+      stock_take_too_much_message: {
+        Args: {
+          available: number
+          current_quantity: number
+          location_label: string
+          lot_label: string
+          take_date: string
+          unit: string
+          what: string
+        }
+        Returns: string
       }
       stock_today: { Args: never; Returns: string }
       stock_transfer_warnings: { Args: { lines: Json }; Returns: Json }
